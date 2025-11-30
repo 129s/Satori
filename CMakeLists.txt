@@ -14,6 +14,18 @@ add_library(SatoriCore STATIC
 
 target_include_directories(SatoriCore PUBLIC src)
 
+if (WIN32)
+    add_library(SatoriWinAudio STATIC
+        src/win/audio/RealtimeSynthRenderer.cpp
+        src/win/audio/SatoriRealtimeEngine.cpp
+        src/win/audio/WASAPIAudioEngine.cpp
+    )
+    target_include_directories(SatoriWinAudio PUBLIC src)
+    target_link_libraries(SatoriWinAudio
+        PUBLIC SatoriCore
+        PRIVATE ole32.lib mmdevapi.lib avrt.lib audioclient.lib)
+endif()
+
 add_executable(Satori
     src/main.cpp
 )
