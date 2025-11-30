@@ -31,6 +31,28 @@ if (WIN32)
     target_link_libraries(SatoriWin PRIVATE SatoriWinAudio)
 endif()
 
+add_library(Catch2Amalgamated STATIC
+    third_party/catch2/catch_amalgamated.cpp
+)
+target_include_directories(Catch2Amalgamated PUBLIC third_party/catch2)
+
+set(TEST_SOURCES
+    tests/main.cpp
+    tests/core_tests.cpp
+)
+if (WIN32)
+    list(APPEND TEST_SOURCES tests/win_audio_tests.cpp)
+endif()
+
+add_executable(SatoriTests ${TEST_SOURCES})
+target_link_libraries(SatoriTests PRIVATE Catch2Amalgamated SatoriCore)
+if (WIN32)
+    target_link_libraries(SatoriTests PRIVATE SatoriWinAudio)
+endif()
+
+enable_testing()
+add_test(NAME SatoriTests COMMAND SatoriTests)
+
 add_executable(Satori
     src/main.cpp
 )
