@@ -16,8 +16,12 @@ SatoriRealtimeEngine::~SatoriRealtimeEngine() {
 
 bool SatoriRealtimeEngine::initialize() {
     using namespace std::placeholders;
-    return audioEngine_.initialize(
+    const bool ok = audioEngine_.initialize(
         [this](float* buffer, std::size_t frames) { handleRender(buffer, frames); });
+    if (ok) {
+        audioConfig_ = audioEngine_.config();
+    }
+    return ok;
 }
 
 void SatoriRealtimeEngine::shutdown() {
