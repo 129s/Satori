@@ -27,6 +27,7 @@ if (WIN32)
 
     add_executable(SatoriWin WIN32
         src/win/app/SatoriWinMain.cpp
+        src/win/ui/ParameterSlider.cpp
         src/win/ui/Direct2DContext.cpp
     )
     target_link_libraries(SatoriWin PRIVATE SatoriWinAudio d2d1.lib dwrite.lib)

@@ -1,10 +1,14 @@
 #include <windows.h>
+#include <windowsx.h>
 
 #include <array>
 #include <memory>
+#include <vector>
 
+#include "synthesis/KarplusStrongString.h"
 #include "win/audio/SatoriRealtimeEngine.h"
 #include "win/ui/Direct2DContext.h"
+#include "win/ui/ParameterSlider.h"
 
 namespace {
 
@@ -13,6 +17,7 @@ const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
 
 std::unique_ptr<winaudio::SatoriRealtimeEngine> g_engine;
 std::unique_ptr<winui::Direct2DContext> g_d2d;
+synthesis::StringConfig g_synthConfig{};
 
 double KeyToFrequency(WPARAM key) {
     switch (key) {
@@ -37,6 +42,12 @@ double KeyToFrequency(WPARAM key) {
     }
 }
 
+void SyncSynthConfig() {
+    if (g_engine) {
+        g_engine->setSynthConfig(g_synthConfig);
+    }
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_CREATE: {
@@ -52,6 +63,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                             MB_ICONERROR | MB_OK);
                 PostQuitMessage(-1);
             }
+            g_synthConfig = g_engine->synthConfig();
+            std::vector<std::shared_ptr<winui::ParameterSlider>> sliders;
+            auto bindSlider = [&](const std::wstring& label, float min, float max,
+                                  float& field) {
+                sliders.push_back(std::make_shared<winui::ParameterSlider>(
+                    label, min, max, field,
+                    [&](float value) {
+                        field = value;
+                        SyncSynthConfig();
+                    }));
+            };
+            bindSlider(L"Decay", 0.90f, 0.999f, g_synthConfig.decay);
+            bindSlider(L"Brightness", 0.0f, 1.0f, g_synthConfig.brightness);
+            bindSlider(L"Pick Position", 0.05f, 0.95f, g_synthConfig.pickPosition);
+            g_d2d->setSliders(std::move(sliders));
             return 0;
         }
         case WM_SIZE: {
@@ -80,6 +106,31 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             return 0;
         }
+        case WM_LBUTTONDOWN: {
+            if (g_d2d && g_d2d->onPointerDown(static_cast<float>(GET_X_LPARAM(lparam)),
+                                              static_cast<float>(GET_Y_LPARAM(lparam)))) {
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        }
+        case WM_MOUSEMOVE: {
+            if ((wparam & MK_LBUTTON) && g_d2d &&
+                g_d2d->onPointerMove(static_cast<float>(GET_X_LPARAM(lparam)),
+                                     static_cast<float>(GET_Y_LPARAM(lparam)))) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        }
+        case WM_LBUTTONUP: {
+            if (g_d2d) {
+                g_d2d->onPointerUp();
+            }
+            ReleaseCapture();
+            return 0;
+        }
         case WM_DESTROY:
             if (g_engine) {
                 g_engine->stop();
@@ -90,8 +141,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             PostQuitMessage(0);
             return 0;
         default:
-            return DefWindowProc(hwnd, msg, wparam, lparam);
+            break;
     }
+
+    return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
 ATOM RegisterSatoriWindowClass(HINSTANCE instance) {
