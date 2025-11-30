@@ -147,9 +147,15 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
 }
 
 void WASAPIAudioEngine::renderLoop() {
+    const HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool comInitialized = SUCCEEDED(initHr);
+
     HRESULT hr = audioClient_->Start();
     if (FAILED(hr)) {
         running_ = false;
+        if (comInitialized) {
+            CoUninitialize();
+        }
         return;
     }
     const UINT32 channels = config_.channels;
@@ -189,6 +195,9 @@ void WASAPIAudioEngine::renderLoop() {
         }
     }
     audioClient_->Stop();
+    if (comInitialized) {
+        CoUninitialize();
+    }
 }
 
 }  // namespace winaudio

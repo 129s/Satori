@@ -90,14 +90,23 @@ HWND CreateSatoriWindow(HINSTANCE instance) {
         nullptr, nullptr, instance, nullptr);
 }
 
-}  // namespace
+int RunSatoriApp(HINSTANCE instance, int show) {
+    const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(hr)) {
+        MessageBoxW(nullptr, L"无法初始化 COM 环境", kWindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return -1;
+    }
 
-int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     if (!RegisterSatoriWindowClass(instance)) {
+        MessageBoxW(nullptr, L"注册窗口类失败", kWindowTitle, MB_ICONERROR | MB_OK);
+        CoUninitialize();
         return -1;
     }
     HWND hwnd = CreateSatoriWindow(instance);
     if (!hwnd) {
+        MessageBoxW(nullptr, L"创建窗口失败", kWindowTitle, MB_ICONERROR | MB_OK);
+        CoUninitialize();
         return -1;
     }
     ShowWindow(hwnd, show);
@@ -108,10 +117,16 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    CoUninitialize();
     return static_cast<int>(msg.wParam);
 }
 
-int APIENTRY WinMain(HINSTANCE instance, HINSTANCE prev, LPSTR cmd, int show) {
-    (void)cmd;
-    return wWinMain(instance, prev, GetCommandLineW(), show);
+}  // namespace
+
+int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
+    return RunSatoriApp(instance, show);
+}
+
+int APIENTRY WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
+    return RunSatoriApp(instance, show);
 }
