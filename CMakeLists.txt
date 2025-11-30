@@ -8,7 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(Satori
     src/main.cpp
     src/audio/WaveWriter.cpp
+    src/dsp/Filter.cpp
     src/synthesis/KarplusStrongString.cpp
+    src/synthesis/KarplusStrongSynth.cpp
 )
 
 target_include_directories(Satori PRIVATE src)
