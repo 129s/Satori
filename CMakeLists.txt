@@ -23,7 +23,12 @@ if (WIN32)
     target_include_directories(SatoriWinAudio PUBLIC src)
     target_link_libraries(SatoriWinAudio
         PUBLIC SatoriCore
-        PRIVATE ole32.lib mmdevapi.lib avrt.lib audioclient.lib)
+        PRIVATE ole32.lib mmdevapi.lib avrt.lib)
+
+    add_executable(SatoriWin WIN32
+        src/win/app/SatoriWinMain.cpp
+    )
+    target_link_libraries(SatoriWin PRIVATE SatoriWinAudio)
 endif()
 
 add_executable(Satori
