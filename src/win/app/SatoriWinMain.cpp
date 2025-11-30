@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "win/audio/SatoriRealtimeEngine.h"
+#include "win/ui/Direct2DContext.h"
 
 namespace {
 
@@ -11,6 +12,7 @@ const wchar_t kWindowClassName[] = L"SatoriWinClass";
 const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
 
 std::unique_ptr<winaudio::SatoriRealtimeEngine> g_engine;
+std::unique_ptr<winui::Direct2DContext> g_d2d;
 
 double KeyToFrequency(WPARAM key) {
     switch (key) {
@@ -44,6 +46,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                             MB_ICONERROR | MB_OK);
                 PostQuitMessage(-1);
             }
+            g_d2d = std::make_unique<winui::Direct2DContext>();
+            if (!g_d2d->initialize(hwnd)) {
+                MessageBoxW(hwnd, L"初始化 Direct2D 失败", kWindowTitle,
+                            MB_ICONERROR | MB_OK);
+                PostQuitMessage(-1);
+            }
+            return 0;
+        }
+        case WM_SIZE: {
+            if (g_d2d) {
+                g_d2d->resize(LOWORD(lparam), HIWORD(lparam));
+            }
+            return 0;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            if (g_d2d) {
+                g_d2d->render();
+            }
+            EndPaint(hwnd, &ps);
             return 0;
         }
         case WM_KEYDOWN: {
@@ -53,6 +76,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             const double freq = KeyToFrequency(wparam);
             if (freq > 0.0) {
                 g_engine->triggerNote(freq, 2.0);
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
         }
@@ -62,6 +86,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 g_engine->shutdown();
                 g_engine.reset();
             }
+            g_d2d.reset();
             PostQuitMessage(0);
             return 0;
         default:
