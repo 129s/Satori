@@ -17,9 +17,9 @@
 3. DSP::FilterChain（占位）
    - 定义统一接口，当前最小实现可返回直通
    - 未来方便注入自定义滤波器重设计
-4. AudioEngine（待实现）
-   - 基于 WASAPI Event-Driven（或 XAudio2）拉取核心样本
-   - 提供线程安全的参数更新与事件触发
+4. AudioEngine
+   - 当前实现：`win/audio/WASAPIAudioEngine` 以事件驱动方式驱动 `SatoriRealtimeEngine`
+   - 对外暴露启动/停止与 RenderCallback，后续可替换为 XAudio2
 5. FX::ConvolutionReverb（占位）
    - 定义卷积核加载与处理接口
    - 最小原型不启用，但保留钩子
@@ -50,3 +50,10 @@ Win32：UI 交互/输入事件 -> 参数模型 -> AudioEngine 拉取合成器 ->
 - 多复音：构建 KarplusStrongSynth 聚合多个弦实例并调度
 - 输入控制：增加键盘或 MIDI 映射层，实时触发 pluck
 - UI/UX：Direct2D 参数自动布局、预设导入导出、波形/频谱可视化
+- 自动化验证：Catch2 用例覆盖核心合成与 WASAPI 管线，CI 需在具备音频设备的 runner 上执行
+
+## 测试与诊断
+- 单元测试：`Catch2` 驱动 `tests/core_tests.cpp`、`tests/win_audio_tests.cpp`
+- CLI/核心：校验样本长度、归一化范围
+- Win32/WASAPI：尝试初始化 `WASAPIAudioEngine`、`SatoriRealtimeEngine`；若设备不可用会显式 FAIL（便于复现 “引擎启动失败” 问题）
+- 后续计划：引入 mock 或可跳过策略，使 CI 在无音频设备时自动标记为 skipped
