@@ -40,9 +40,14 @@ build/Satori --notes 261.63,329.63,392 --duration 1.5 --filter none
 ### 3. 运行 Win32 预览
 1. Windows 10+、具备可用的输出声卡
 2. 在 Release 构建中运行 `SatoriWin.exe`
-3. 键盘 `A~K` 触发 C4~C5，滑块实时调节 `Decay/Brightness/Pick Position`
+3. 键盘 `A~K` 或窗口底部的虚拟键盘触发 C4~C5，滑块实时调节 `Decay/Brightness/Pick Position`
+4. 顶部按钮可加载/保存 `presets/` 目录下的 JSON 预设，波形视图实时展示最近一次触发的弦形
 
-首次初始化会弹出失败信息（如缺少音频设备）。常见解决方案见 [docs/troubleshooting/win_audio.md](docs/troubleshooting/win_audio.md)。
+若系统无可用音频设备，应用会进入“离线”模式：UI 仍可调参、浏览预设与观察波形，但不会触发实际声音输出。常见异常的解决方案见 [docs/troubleshooting/win_audio.md](docs/troubleshooting/win_audio.md)。
+
+### 4. 预设与打包
+- 预设文件位于 `presets/`，默认为 `default.json`，保存的用户预设输出到 `presets/user.json`
+- 可执行 `scripts/package_win.ps1 -BuildDir build -StagingDir build/package`，快速打包 `SatoriWin.exe`、预设与诊断文档，便于分发离线 Demo
 
 ## 测试
 ```powershell
@@ -57,6 +62,7 @@ build/SatoriTests "[!wasapi][!realtime-engine]"   # 无音频设备环境可跳�
 - [docs/architecture/overview.md](docs/architecture/overview.md)：系统结构与数据流
 - [docs/roadmap/milestones.md](docs/roadmap/milestones.md)：迭代计划与验收标准
 - [docs/troubleshooting/win_audio.md](docs/troubleshooting/win_audio.md)：实时音频诊断
+- `scripts/package_win.ps1`：Win32 预览的最小打包脚本
 
 更新文档时请保持中文描述，并在相关章节添加交叉链接，便于新贡献者快速定位上下文。
 

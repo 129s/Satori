@@ -5,6 +5,8 @@
 #include <windows.h>
 
 #include "win/ui/ParameterSlider.h"
+#include "win/ui/VirtualKeyboard.h"
+#include "win/ui/WaveformView.h"
 
 namespace winui {
 
@@ -12,8 +14,9 @@ namespace {
 
 const wchar_t* kInstructionText =
     L"Satori Preview\n"
-    L"- 使用键盘 A~K 触发音符\n"
-    L"- 即将加入旋钮/UI 控件";
+    L"- 使用键盘 A~K 或下方虚拟键触发音符\n"
+    L"- 利用滑块/预设调节音色\n"
+    L"- 波形视图展示最近音符的包络";
 
 }  // namespace
 
@@ -51,6 +54,8 @@ bool Direct2DContext::initialize(HWND hwnd) {
     }
     textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    waveformView_ = std::make_shared<WaveformView>();
+    keyboard_ = std::make_shared<VirtualKeyboard>();
     return createDeviceResources();
 }
 
@@ -60,19 +65,58 @@ void Direct2DContext::resize(UINT width, UINT height) {
     if (renderTarget_) {
         renderTarget_->Resize(D2D1::SizeU(width, height));
     }
-    updateSliderLayout();
+    updateLayout();
 }
 
 void Direct2DContext::handleDeviceLost() {
     discardDeviceResources();
     createDeviceResources();
-    updateSliderLayout();
+    updateLayout();
 }
 
 void Direct2DContext::setSliders(
     std::vector<std::shared_ptr<ParameterSlider>> sliders) {
     sliders_ = std::move(sliders);
-    updateSliderLayout();
+    updateLayout();
+}
+
+void Direct2DContext::setWaveformSamples(const std::vector<float>& samples) {
+    if (!waveformView_) {
+        waveformView_ = std::make_shared<WaveformView>();
+    }
+    waveformView_->setSamples(samples);
+}
+
+void Direct2DContext::setKeyboardCallback(std::function<void(double)> callback) {
+    if (!keyboard_) {
+        keyboard_ = std::make_shared<VirtualKeyboard>();
+    }
+    keyboard_->setCallback(std::move(callback));
+}
+
+void Direct2DContext::setPresetCallbacks(std::function<void()> onLoad,
+                                         std::function<void()> onSave) {
+    buttons_.clear();
+    if (onLoad) {
+        buttons_.push_back(Button{L"加载预设", {}, std::move(onLoad), false});
+    }
+    if (onSave) {
+        buttons_.push_back(Button{L"保存预设", {}, std::move(onSave), false});
+    }
+    updateLayout();
+}
+
+void Direct2DContext::setStatusText(std::wstring status) {
+    statusText_ = std::move(status);
+}
+
+void Direct2DContext::setKeyboardKeys(
+    const std::vector<std::pair<std::wstring, double>>& keys) {
+    if (!keyboard_) {
+        keyboard_ = std::make_shared<VirtualKeyboard>();
+    }
+    keyboard_->setKeys(keys);
+    updateLayout();
 }
 
 bool Direct2DContext::onPointerDown(float x, float y) {
@@ -82,12 +126,29 @@ bool Direct2DContext::onPointerDown(float x, float y) {
             return true;
         }
     }
+    if (keyboard_ && keyboard_->onPointerDown(x, y)) {
+        return true;
+    }
+    if (hitButton(x, y)) {
+        return true;
+    }
     return false;
 }
 
 bool Direct2DContext::onPointerMove(float x, float y) {
     if (activeSlider_) {
         return activeSlider_->onPointerMove(x, y);
+    }
+    if (keyboard_ && keyboard_->onPointerMove(x, y)) {
+        return true;
+    }
+    if (activeButton_) {
+        const bool inside = x >= activeButton_->bounds.left &&
+                            x <= activeButton_->bounds.right &&
+                            y >= activeButton_->bounds.top &&
+                            y <= activeButton_->bounds.bottom;
+        activeButton_->pressed = inside;
+        return inside;
     }
     return false;
 }
@@ -96,6 +157,18 @@ void Direct2DContext::onPointerUp() {
     if (activeSlider_) {
         activeSlider_->onPointerUp();
         activeSlider_.reset();
+    }
+    if (keyboard_) {
+        keyboard_->onPointerUp();
+    }
+    if (activeButton_) {
+        const bool execute = activeButton_->pressed;
+        activeButton_->pressed = false;
+        auto callback = activeButton_->onClick;
+        activeButton_ = nullptr;
+        if (execute && callback) {
+            callback();
+        }
     }
 }
 
@@ -139,6 +212,16 @@ bool Direct2DContext::createDeviceResources() {
     if (FAILED(hr)) {
         return false;
     }
+    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.12f, 0.15f, 0.2f, 1.0f),
+                                              &panelBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.35f, 0.4f, 0.45f, 1.0f),
+                                              &gridBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
     return true;
 }
 
@@ -147,6 +230,8 @@ void Direct2DContext::discardDeviceResources() {
     textBrush_.Reset();
     trackBrush_.Reset();
     fillBrush_.Reset();
+    panelBrush_.Reset();
+    gridBrush_.Reset();
     renderTarget_.Reset();
 }
 
@@ -158,17 +243,55 @@ void Direct2DContext::render() {
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
     renderTarget_->Clear(D2D1::ColorF(0.07f, 0.07f, 0.09f));
 
+    if (panelBrush_) {
+        RECT rc{};
+        GetClientRect(hwnd_, &rc);
+        const auto bgRect =
+            D2D1::RectF(static_cast<float>(rc.left) + 12.0f,
+                        static_cast<float>(rc.top) + 12.0f,
+                        static_cast<float>(rc.right) - 12.0f,
+                        static_cast<float>(rc.bottom) - 12.0f);
+        renderTarget_->FillRectangle(bgRect, panelBrush_.Get());
+    }
+
     if (textBrush_ && textFormat_) {
         RECT rc{};
         GetClientRect(hwnd_, &rc);
         const D2D1_RECT_F layoutRect =
-            D2D1::RectF(static_cast<FLOAT>(rc.left) + 20.0f,
-                        static_cast<FLOAT>(rc.top) + 20.0f,
-                        static_cast<FLOAT>(rc.right) - 20.0f,
-                        static_cast<FLOAT>(rc.bottom) - 20.0f);
+            D2D1::RectF(static_cast<FLOAT>(rc.left) + 24.0f,
+                        static_cast<FLOAT>(rc.top) + 24.0f,
+                        static_cast<FLOAT>(rc.left) + 360.0f,
+                        static_cast<FLOAT>(rc.top) + 160.0f);
         renderTarget_->DrawText(
             kInstructionText, static_cast<UINT32>(wcslen(kInstructionText)),
             textFormat_.Get(), layoutRect, textBrush_.Get());
+        if (!statusText_.empty()) {
+            const D2D1_RECT_F statusRect =
+                D2D1::RectF(static_cast<FLOAT>(rc.right) - 360.0f,
+                            static_cast<FLOAT>(rc.top) + 24.0f,
+                            static_cast<FLOAT>(rc.right) - 24.0f,
+                            static_cast<FLOAT>(rc.top) + 120.0f);
+            renderTarget_->DrawText(statusText_.c_str(),
+                                    static_cast<UINT32>(statusText_.size()),
+                                    textFormat_.Get(), statusRect,
+                                    textBrush_.Get());
+        }
+    }
+
+    if (!buttons_.empty() && textFormat_ && fillBrush_ && accentBrush_) {
+        for (const auto& button : buttons_) {
+            auto* brush = button.pressed ? accentBrush_.Get() : fillBrush_.Get();
+            renderTarget_->FillRectangle(button.bounds, brush);
+            renderTarget_->DrawRectangle(button.bounds, accentBrush_.Get(), 1.5f);
+            renderTarget_->DrawText(
+                button.label.c_str(), static_cast<UINT32>(button.label.size()),
+                textFormat_.Get(), button.bounds, textBrush_.Get());
+        }
+    }
+
+    if (waveformView_ && panelBrush_ && gridBrush_ && accentBrush_) {
+        waveformView_->draw(renderTarget_.Get(), panelBrush_.Get(), gridBrush_.Get(),
+                            accentBrush_.Get());
     }
 
     if (!sliders_.empty() && trackBrush_ && fillBrush_ && accentBrush_ &&
@@ -179,30 +302,79 @@ void Direct2DContext::render() {
         }
     }
 
+    if (keyboard_ && accentBrush_ && textFormat_ && panelBrush_) {
+        keyboard_->draw(renderTarget_.Get(), accentBrush_.Get(), panelBrush_.Get(),
+                        fillBrush_.Get(), textFormat_.Get());
+    }
+
     HRESULT hr = renderTarget_->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
         handleDeviceLost();
     }
 }
 
-void Direct2DContext::updateSliderLayout() {
-    if (sliders_.empty() || width_ == 0 || height_ == 0) {
+void Direct2DContext::updateLayout() {
+    if (width_ == 0 || height_ == 0) {
         return;
+    }
+    if (!waveformView_) {
+        waveformView_ = std::make_shared<WaveformView>();
+    }
+    if (!keyboard_) {
+        keyboard_ = std::make_shared<VirtualKeyboard>();
     }
     const float margin = 40.0f;
     const float availableWidth = static_cast<float>(width_) - 2.0f * margin;
-    const float sliderHeight = 80.0f;
-    const float spacing = 18.0f;
-    float y = 180.0f;
-    for (auto& slider : sliders_) {
-        if (!slider) {
-            continue;
-        }
-        D2D1_RECT_F bounds =
-            D2D1::RectF(margin, y, margin + availableWidth, y + sliderHeight);
-        slider->setBounds(bounds);
-        y += sliderHeight + spacing;
+    const float buttonHeight = 36.0f;
+
+    float buttonX = margin;
+    for (auto& button : buttons_) {
+        button.bounds = D2D1::RectF(buttonX, margin, buttonX + 120.0f,
+                                    margin + buttonHeight);
+        buttonX += 132.0f;
     }
+
+    const float waveformHeight = 180.0f;
+    const float waveformTop = margin + buttonHeight + 20.0f;
+    waveformView_->setBounds(
+        D2D1::RectF(margin, waveformTop, margin + availableWidth,
+                    waveformTop + waveformHeight));
+
+    const float keyboardHeight = 110.0f;
+    const float keyboardTop =
+        static_cast<float>(height_) - margin - keyboardHeight;
+    keyboard_->setBounds(D2D1::RectF(margin, keyboardTop, margin + availableWidth,
+                                     keyboardTop + keyboardHeight));
+
+    if (!sliders_.empty()) {
+        const float sliderHeight = 80.0f;
+        const float spacing = 18.0f;
+        float y = waveformTop + waveformHeight + 28.0f;
+        const float maxY = keyboardTop - 24.0f;
+        for (auto& slider : sliders_) {
+            if (!slider) {
+                continue;
+            }
+            if (y + sliderHeight > maxY) {
+                break;
+            }
+            slider->setBounds(
+                D2D1::RectF(margin, y, margin + availableWidth, y + sliderHeight));
+            y += sliderHeight + spacing;
+        }
+    }
+}
+
+bool Direct2DContext::hitButton(float x, float y) {
+    for (auto& button : buttons_) {
+        if (x >= button.bounds.left && x <= button.bounds.right &&
+            y >= button.bounds.top && y <= button.bounds.bottom) {
+            button.pressed = true;
+            activeButton_ = &button;
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace winui

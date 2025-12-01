@@ -1,0 +1,8 @@
+{
+  "name": "WarmPad",
+  "decay": 0.994,
+  "brightness": 0.45,
+  "pickPosition": 0.35,
+  "enableLowpass": true,
+  "noiseType": "white"
+}

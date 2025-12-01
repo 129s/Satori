@@ -56,6 +56,7 @@ Win32：UI 交互/输入事件 -> 参数模型 -> AudioEngine 拉取合成器 ->
 - 输入通道：
   - 键盘 `A~K` -> `KeyToFrequency` -> `SatoriRealtimeEngine::triggerNote`
   - 鼠标事件 -> `Direct2DContext::onPointer*` -> `ParameterSlider::onPointer*` -> 回调更新参数
+- 波形视图 `WaveformView` 负责绘制最近一次拨弦样本，虚拟键盘 `VirtualKeyboard` 映射可点击按键触发频率；预设按钮会在无法加载音频设备时仍可使用
 - 规划中的组件：波形/电平监视器、虚拟键盘、预设列表、日志浮窗；相关 Direct2D 元素需在本层集中管理，防止多处重复初始化 COM/D2D
 
 ## 关键配置

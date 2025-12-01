@@ -30,6 +30,7 @@ public:
     bool onPointerDown(float x, float y);
     bool onPointerMove(float x, float y);
     void onPointerUp();
+    void syncValue(float value);
 
     float value() const { return value_; }
 

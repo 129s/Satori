@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mutex>
+#include <string>
 
 #include "synthesis/KarplusStrongString.h"
 #include "win/audio/RealtimeSynthRenderer.h"
@@ -22,6 +23,7 @@ public:
     void triggerNote(double frequency, double durationSeconds);
     void setSynthConfig(const synthesis::StringConfig& config);
     const synthesis::StringConfig& synthConfig() const { return synthConfig_; }
+    const std::string& lastError() const { return audioEngine_.lastError(); }
 
 private:
     void handleRender(float* output, std::size_t frames);

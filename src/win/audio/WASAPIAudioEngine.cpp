@@ -10,10 +10,13 @@ namespace winaudio {
 
 namespace {
 
-void LogHResult(const char* stage, HRESULT hr) {
+std::string FormatHResult(const char* stage, HRESULT hr) {
     std::ostringstream oss;
     oss << "[WASAPI] " << stage << " failed: 0x" << std::hex << hr << std::dec << "\n";
-    const auto message = oss.str();
+    return oss.str();
+}
+
+void LogError(const std::string& message) {
     OutputDebugStringA(message.c_str());
     std::cerr << message;
 }
@@ -51,6 +54,7 @@ bool WASAPIAudioEngine::initialize(RenderCallback callback) {
     if (initialized_) {
         return true;
     }
+    lastError_.clear();
     renderCallback_ = std::move(callback);
     if (!createDevice() || !createClient() || !createEventHandle()) {
         shutdown();
@@ -100,12 +104,16 @@ bool WASAPIAudioEngine::createDevice() {
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                                   IID_PPV_ARGS(&enumerator_));
     if (FAILED(hr)) {
-        LogHResult("CoCreateInstance(MMDeviceEnumerator)", hr);
+        const auto message = FormatHResult("CoCreateInstance(MMDeviceEnumerator)", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
     if (FAILED(hr)) {
-        LogHResult("GetDefaultAudioEndpoint", hr);
+        const auto message = FormatHResult("GetDefaultAudioEndpoint", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     return true;
@@ -118,7 +126,9 @@ bool WASAPIAudioEngine::createClient() {
     HRESULT hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
                                    &audioClient_);
     if (FAILED(hr)) {
-        LogHResult("Activate(IAudioClient)", hr);
+        const auto message = FormatHResult("Activate(IAudioClient)", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     return true;
@@ -132,7 +142,9 @@ bool WASAPIAudioEngine::createRenderClient() {
     HRESULT hr = audioClient_->GetService(__uuidof(IAudioRenderClient),
                                           &renderClient_);
     if (FAILED(hr)) {
-        LogHResult("GetService(IAudioRenderClient)", hr);
+        const auto message = FormatHResult("GetService(IAudioRenderClient)", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     return true;
@@ -141,7 +153,10 @@ bool WASAPIAudioEngine::createRenderClient() {
 bool WASAPIAudioEngine::createEventHandle() {
     audioEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!audioEvent_) {
-        LogHResult("CreateEvent", HRESULT_FROM_WIN32(GetLastError()));
+        const auto message =
+            FormatHResult("CreateEvent", HRESULT_FROM_WIN32(GetLastError()));
+        setLastError(message);
+        LogError(message);
         return false;
     }
     return true;
@@ -155,7 +170,9 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
     MixFormatHolder mixFormat;
     HRESULT hr = audioClient_->GetMixFormat(&mixFormat);
     if (FAILED(hr) || mixFormat.get() == nullptr) {
-        LogHResult("IAudioClient::GetMixFormat", hr);
+        const auto message = FormatHResult("IAudioClient::GetMixFormat", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     config_.sampleRate = mixFormat.get()->nSamplesPerSec;
@@ -168,7 +185,9 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
                                   AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                                   bufferDuration, 0, mixFormat.get(), nullptr);
     if (FAILED(hr)) {
-        LogHResult("IAudioClient::Initialize", hr);
+        const auto message = FormatHResult("IAudioClient::Initialize", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     if (!createRenderClient()) {
@@ -176,13 +195,17 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
     }
     hr = audioClient_->SetEventHandle(audioEvent_);
     if (FAILED(hr)) {
-        LogHResult("IAudioClient::SetEventHandle", hr);
+        const auto message = FormatHResult("IAudioClient::SetEventHandle", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     UINT32 bufferFrameCount = 0;
     hr = audioClient_->GetBufferSize(&bufferFrameCount);
     if (FAILED(hr)) {
-        LogHResult("IAudioClient::GetBufferSize", hr);
+        const auto message = FormatHResult("IAudioClient::GetBufferSize", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     config_.bufferFrames = bufferFrameCount;
@@ -190,14 +213,19 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
     BYTE* data = nullptr;
     hr = renderClient_->GetBuffer(bufferFrameCount, &data);
     if (FAILED(hr)) {
-        LogHResult("IAudioRenderClient::GetBuffer (prime)", hr);
+        const auto message = FormatHResult("IAudioRenderClient::GetBuffer (prime)", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     std::fill_n(reinterpret_cast<float*>(data),
                 bufferFrameCount * config_.channels, 0.0f);
     hr = renderClient_->ReleaseBuffer(bufferFrameCount, 0);
     if (FAILED(hr)) {
-        LogHResult("IAudioRenderClient::ReleaseBuffer (prime)", hr);
+        const auto message =
+            FormatHResult("IAudioRenderClient::ReleaseBuffer (prime)", hr);
+        setLastError(message);
+        LogError(message);
         return false;
     }
     return true;
@@ -209,7 +237,9 @@ void WASAPIAudioEngine::renderLoop() {
 
     HRESULT hr = audioClient_->Start();
     if (FAILED(hr)) {
-        LogHResult("IAudioClient::Start", hr);
+        const auto message = FormatHResult("IAudioClient::Start", hr);
+        setLastError(message);
+        LogError(message);
         running_ = false;
         if (comInitialized) {
             CoUninitialize();
@@ -221,14 +251,19 @@ void WASAPIAudioEngine::renderLoop() {
     while (running_) {
         DWORD waitResult = WaitForSingleObject(audioEvent_, 2000);
         if (waitResult != WAIT_OBJECT_0) {
-            LogHResult("WaitForSingleObject", HRESULT_FROM_WIN32(GetLastError()));
+            const auto message =
+                FormatHResult("WaitForSingleObject", HRESULT_FROM_WIN32(GetLastError()));
+            setLastError(message);
+            LogError(message);
             running_ = false;
             break;
         }
         UINT32 padding = 0;
         hr = audioClient_->GetCurrentPadding(&padding);
         if (FAILED(hr)) {
-            LogHResult("IAudioClient::GetCurrentPadding", hr);
+            const auto message = FormatHResult("IAudioClient::GetCurrentPadding", hr);
+            setLastError(message);
+            LogError(message);
             running_ = false;
             break;
         }
@@ -239,7 +274,9 @@ void WASAPIAudioEngine::renderLoop() {
         BYTE* data = nullptr;
         hr = renderClient_->GetBuffer(framesAvailable, &data);
         if (FAILED(hr)) {
-            LogHResult("IAudioRenderClient::GetBuffer", hr);
+            const auto message = FormatHResult("IAudioRenderClient::GetBuffer", hr);
+            setLastError(message);
+            LogError(message);
             running_ = false;
             break;
         }
@@ -251,7 +288,9 @@ void WASAPIAudioEngine::renderLoop() {
         }
         hr = renderClient_->ReleaseBuffer(framesAvailable, 0);
         if (FAILED(hr)) {
-            LogHResult("IAudioRenderClient::ReleaseBuffer", hr);
+            const auto message = FormatHResult("IAudioRenderClient::ReleaseBuffer", hr);
+            setLastError(message);
+            LogError(message);
             running_ = false;
             break;
         }
@@ -260,6 +299,10 @@ void WASAPIAudioEngine::renderLoop() {
     if (comInitialized) {
         CoUninitialize();
     }
+}
+
+void WASAPIAudioEngine::setLastError(const std::string& message) {
+    lastError_ = message;
 }
 
 }  // namespace winaudio

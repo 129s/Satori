@@ -125,4 +125,8 @@ void ParameterSlider::onPointerUp() {
     dragging_ = false;
 }
 
+void ParameterSlider::syncValue(float value) {
+    setValue(value, false);
+}
+
 }  // namespace winui

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -36,18 +37,20 @@ public:
 
     bool isRunning() const { return running_; }
     const AudioEngineConfig& config() const { return config_; }
+    const std::string& lastError() const { return lastError_; }
 
 private:
     bool createDevice();
     bool createClient();
     bool createRenderClient();
     bool createEventHandle();
-    void releaseCOM();
     bool configureEngine(RenderCallback callback);
     void renderLoop();
+    void setLastError(const std::string& message);
 
     AudioEngineConfig config_;
     RenderCallback renderCallback_;
+    std::string lastError_;
 
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator_;
     Microsoft::WRL::ComPtr<IMMDevice> device_;
