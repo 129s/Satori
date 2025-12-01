@@ -16,6 +16,7 @@ public:
     void setBounds(const D2D1_RECT_F& bounds);
     void setCallback(Callback callback);
     void setKeys(const std::vector<std::pair<std::wstring, double>>& keys);
+    void layoutKeys();
 
     void draw(ID2D1HwndRenderTarget* target,
               ID2D1SolidColorBrush* borderBrush,
@@ -37,7 +38,6 @@ private:
 
     Key* hitTest(float x, float y);
     void triggerKey(Key* key);
-    void layoutKeys();
 
     D2D1_RECT_F bounds_{};
     std::vector<Key> keys_;
