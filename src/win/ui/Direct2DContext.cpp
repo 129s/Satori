@@ -1,5 +1,6 @@
 #include "win/ui/Direct2DContext.h"
 
+#include <algorithm>
 #include <cwchar>
 #include <d2d1helper.h>
 #include <windows.h>
@@ -339,34 +340,68 @@ void Direct2DContext::updateLayout() {
         buttonX += 132.0f;
     }
 
-    const float waveformHeight = 180.0f;
-    const float waveformTop = buttonTop + buttonHeight + 20.0f;
-    waveformView_->setBounds(
-        D2D1::RectF(margin, waveformTop, margin + availableWidth,
-                    waveformTop + waveformHeight));
-
     const float keyboardHeight = 110.0f;
     const float keyboardTop =
         static_cast<float>(height_) - margin - keyboardHeight;
     keyboard_->setBounds(D2D1::RectF(margin, keyboardTop, margin + availableWidth,
                                      keyboardTop + keyboardHeight));
 
+    const float contentTop = buttonTop + buttonHeight + 20.0f;
+    float contentBottom = keyboardTop - 20.0f;
+    if (contentBottom <= contentTop + 40.0f) {
+        contentBottom = contentTop + 40.0f;
+    }
+    const float contentHeight = contentBottom - contentTop;
+
+    float waveformHeight = std::max(100.0f, contentHeight * 0.6f);
+    float sliderAreaHeight = contentHeight - waveformHeight;
+    if (sliderAreaHeight < 80.0f) {
+        sliderAreaHeight = 80.0f;
+        waveformHeight = std::max(60.0f, contentHeight - sliderAreaHeight);
+    }
+    if (waveformHeight < 80.0f) {
+        waveformHeight = 80.0f;
+        sliderAreaHeight = std::max(40.0f, contentHeight - waveformHeight);
+    }
+    const float waveformTop = contentTop;
+    const float waveformBottom =
+        std::min(contentBottom - sliderAreaHeight, waveformTop + waveformHeight);
+    waveformView_->setBounds(
+        D2D1::RectF(margin, waveformTop, margin + availableWidth, waveformBottom));
+
+    float sliderAreaTop = waveformBottom + 20.0f;
+    float sliderAreaBottom = contentBottom;
+    if (sliderAreaBottom - sliderAreaTop < 40.0f) {
+        sliderAreaTop = sliderAreaBottom - 40.0f;
+    }
+    float sliderAreaHeightFinal = sliderAreaBottom - sliderAreaTop;
+
     if (!sliders_.empty()) {
-        const float sliderHeight = 80.0f;
-        const float spacing = 18.0f;
-        float y = waveformTop + waveformHeight + 28.0f;
-        const float maxY = keyboardTop - 24.0f;
+        const float spacing = 16.0f;
+        const std::size_t sliderCount = sliders_.size();
+        const float totalSpacing =
+            spacing * static_cast<float>(sliderCount > 0 ? sliderCount - 1 : 0);
+        const float eachHeight =
+            std::max(40.0f,
+                     (sliderAreaHeightFinal - totalSpacing) /
+                         static_cast<float>(std::max<std::size_t>(1, sliderCount)));
+        float y = sliderAreaTop;
         for (auto& slider : sliders_) {
             if (!slider) {
                 continue;
             }
-            if (y + sliderHeight > maxY) {
+            if (y >= sliderAreaBottom) {
                 break;
             }
+            const float bottom = std::min(y + eachHeight, sliderAreaBottom);
             slider->setBounds(
-                D2D1::RectF(margin, y, margin + availableWidth, y + sliderHeight));
-            y += sliderHeight + spacing;
+                D2D1::RectF(margin, y, margin + availableWidth, bottom));
+            y = bottom + spacing;
         }
+    }
+
+    if (keyboard_) {
+        keyboard_->layoutKeys();
     }
 }
 
