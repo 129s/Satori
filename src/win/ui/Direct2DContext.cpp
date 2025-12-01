@@ -257,20 +257,23 @@ void Direct2DContext::render() {
     if (textBrush_ && textFormat_) {
         RECT rc{};
         GetClientRect(hwnd_, &rc);
+        const float margin = 24.0f;
+        const float instructionWidth = 360.0f;
+        const float instructionHeight = 120.0f;
         const D2D1_RECT_F layoutRect =
-            D2D1::RectF(static_cast<FLOAT>(rc.left) + 24.0f,
-                        static_cast<FLOAT>(rc.top) + 24.0f,
-                        static_cast<FLOAT>(rc.left) + 360.0f,
-                        static_cast<FLOAT>(rc.top) + 160.0f);
+            D2D1::RectF(static_cast<FLOAT>(rc.left) + margin,
+                        static_cast<FLOAT>(rc.top) + margin,
+                        static_cast<FLOAT>(rc.left) + margin + instructionWidth,
+                        static_cast<FLOAT>(rc.top) + margin + instructionHeight);
         renderTarget_->DrawText(
             kInstructionText, static_cast<UINT32>(wcslen(kInstructionText)),
             textFormat_.Get(), layoutRect, textBrush_.Get());
         if (!statusText_.empty()) {
             const D2D1_RECT_F statusRect =
-                D2D1::RectF(static_cast<FLOAT>(rc.right) - 360.0f,
-                            static_cast<FLOAT>(rc.top) + 24.0f,
-                            static_cast<FLOAT>(rc.right) - 24.0f,
-                            static_cast<FLOAT>(rc.top) + 120.0f);
+                D2D1::RectF(static_cast<FLOAT>(rc.right) - margin - instructionWidth,
+                            static_cast<FLOAT>(rc.top) + margin,
+                            static_cast<FLOAT>(rc.right) - margin,
+                            static_cast<FLOAT>(rc.top) + margin + 96.0f);
             renderTarget_->DrawText(statusText_.c_str(),
                                     static_cast<UINT32>(statusText_.size()),
                                     textFormat_.Get(), statusRect,
@@ -324,18 +327,20 @@ void Direct2DContext::updateLayout() {
         keyboard_ = std::make_shared<VirtualKeyboard>();
     }
     const float margin = 40.0f;
+    const float instructionHeight = 120.0f;
     const float availableWidth = static_cast<float>(width_) - 2.0f * margin;
     const float buttonHeight = 36.0f;
 
     float buttonX = margin;
+    const float buttonTop = margin + instructionHeight + 12.0f;
     for (auto& button : buttons_) {
-        button.bounds = D2D1::RectF(buttonX, margin, buttonX + 120.0f,
-                                    margin + buttonHeight);
+        button.bounds = D2D1::RectF(buttonX, buttonTop, buttonX + 120.0f,
+                                    buttonTop + buttonHeight);
         buttonX += 132.0f;
     }
 
     const float waveformHeight = 180.0f;
-    const float waveformTop = margin + buttonHeight + 20.0f;
+    const float waveformTop = buttonTop + buttonHeight + 20.0f;
     waveformView_->setBounds(
         D2D1::RectF(margin, waveformTop, margin + availableWidth,
                     waveformTop + waveformHeight));
