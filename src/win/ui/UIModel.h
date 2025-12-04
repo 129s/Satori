@@ -1,0 +1,52 @@
+#pragma once
+
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace winui {
+
+struct ButtonDescriptor {
+    std::wstring label;
+    std::function<void()> onClick;
+};
+
+struct SliderDescriptor {
+    std::wstring label;
+    float min = 0.0f;
+    float max = 1.0f;
+    std::function<float()> getter;
+    std::function<void(float)> setter;
+};
+
+struct StatusInfo {
+    std::wstring primary;
+    std::wstring secondary;
+};
+
+struct VirtualKeyDescriptor {
+    std::wstring label;
+    double frequency = 0.0;
+};
+
+struct FlowDiagramState {
+    float decay = 0.0f;
+    float brightness = 0.0f;
+    float pickPosition = 0.0f;
+    int noiseType = 0;  // 0 = White, 1 = Binary（或项目内部约定）
+};
+
+struct UIModel {
+    std::vector<std::wstring> instructions;
+    StatusInfo status;
+    std::vector<ButtonDescriptor> buttons;
+    std::vector<SliderDescriptor> sliders;
+    std::vector<VirtualKeyDescriptor> keys;
+    std::function<void(double)> keyCallback;
+    std::vector<float> waveformSamples;
+    bool audioOnline = false;
+    float sampleRate = 0.0f;
+    FlowDiagramState diagram;
+};
+
+}  // namespace winui

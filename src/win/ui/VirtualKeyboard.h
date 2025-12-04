@@ -34,6 +34,7 @@ private:
         double frequency = 0.0;
         D2D1_RECT_F bounds{};
         bool pressed = false;
+        bool hovered = false;
     };
 
     Key* hitTest(float x, float y);

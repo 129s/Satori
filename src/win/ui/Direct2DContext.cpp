@@ -2,26 +2,87 @@
 
 #include <algorithm>
 #include <cwchar>
-#include <d2d1helper.h>
-#include <windows.h>
+#include <sstream>
 
-#include "win/ui/ParameterSlider.h"
-#include "win/ui/VirtualKeyboard.h"
-#include "win/ui/WaveformView.h"
+#include <d2d1helper.h>
+
+#include "win/ui/NunitoFont.h"
+#include "win/ui/RenderResources.h"
+#include "win/ui/UIModel.h"
+#include "win/ui/nodes/FlowDiagramNode.h"
+#include "win/ui/nodes/KeyboardNode.h"
+#include "win/ui/nodes/KnobPanelNode.h"
+#include "win/ui/nodes/TopBarNode.h"
+#include "win/ui/layout/UIStackPanel.h"
 
 namespace winui {
 
 namespace {
 
-const wchar_t* kInstructionText =
-    L"Satori Preview\n"
-    L"- 使用键盘 A~K 或下方虚拟键触发音符\n"
-    L"- 利用滑块/预设调节音色\n"
-    L"- 波形视图展示最近音符的包络";
+UISkinConfig MakeDefaultSkinConfig() {
+    UISkinConfig config;
+    config.id = UISkinId::kDefault;
+    config.name = L"Default";
+    config.assetsBaseDir = L"assets/ui/default";
+    config.primaryFontFamily = L"Nunito";
+    config.baseFontSize = 18.0f;
+    return config;
+}
+
+UISkinConfig MakeSerumPrototypeSkinConfig() {
+    UISkinConfig config;
+    config.id = UISkinId::kSerumPrototype;
+    config.name = L"Serum Prototype";
+    // 仅作为项目自有 Serum 风格资源的推荐目录占位，实际素材需单独整理到该目录。
+    config.assetsBaseDir = L"assets/ui/serum_theme";
+    // Serum UI 常见配色会搭配类似 Nunito 的圆角无衬线字体，这里以 Nunito 为首选，
+    // 并依赖 assets/Fonts/Nunito-Regular.ttf 私有字体确保可用。
+    config.primaryFontFamily = L"Nunito";
+    config.baseFontSize = 17.0f;
+    return config;
+}
+
+struct SkinBrushColors {
+    D2D1_COLOR_F accent{};
+    D2D1_COLOR_F text{};
+    D2D1_COLOR_F track{};
+    D2D1_COLOR_F fill{};
+    D2D1_COLOR_F panel{};
+    D2D1_COLOR_F grid{};
+};
+
+SkinBrushColors MakeBrushColors(const UISkinConfig& skinConfig) {
+    SkinBrushColors colors{};
+    if (skinConfig.id == UISkinId::kSerumPrototype) {
+        // Serum 风格：更亮的强调色、略偏蓝绿的填充与更深的背景。
+        colors.accent = D2D1::ColorF(0.95f, 0.98f, 1.0f, 1.0f);
+        colors.text = D2D1::ColorF(0.90f, 0.95f, 1.0f, 1.0f);
+        colors.track = D2D1::ColorF(0.11f, 0.13f, 0.17f, 1.0f);
+        colors.fill = D2D1::ColorF(0.24f, 0.50f, 0.78f, 1.0f);
+        colors.panel = D2D1::ColorF(0.06f, 0.08f, 0.12f, 1.0f);
+        colors.grid = D2D1::ColorF(0.35f, 0.40f, 0.48f, 1.0f);
+    } else {
+        // 默认主题保持现有颜色，避免影响既有体验。
+        colors.accent = D2D1::ColorF(0.4f, 0.7f, 0.9f, 1.0f);
+        colors.text = D2D1::ColorF(0.9f, 0.9f, 0.95f, 1.0f);
+        colors.track = D2D1::ColorF(0.15f, 0.15f, 0.2f, 1.0f);
+        colors.fill = D2D1::ColorF(0.25f, 0.55f, 0.75f, 1.0f);
+        colors.panel = D2D1::ColorF(0.12f, 0.15f, 0.2f, 1.0f);
+        colors.grid = D2D1::ColorF(0.35f, 0.4f, 0.45f, 1.0f);
+    }
+    return colors;
+}
 
 }  // namespace
 
-Direct2DContext::Direct2DContext() = default;
+Direct2DContext::Direct2DContext() {
+#ifdef SATORI_ENABLE_SERUM_SKIN
+    skinConfig_ = MakeSerumPrototypeSkinConfig();
+#else
+    skinConfig_ = MakeDefaultSkinConfig();
+#endif
+    skinResources_.config = skinConfig_;
+}
 Direct2DContext::~Direct2DContext() = default;
 
 bool Direct2DContext::initialize(HWND hwnd) {
@@ -46,17 +107,34 @@ bool Direct2DContext::initialize(HWND hwnd) {
     if (FAILED(hr)) {
         return false;
     }
+
+    // 按当前皮肤配置创建文本格式，Nunito 为全局默认字体。
+    const wchar_t* primaryFont =
+        skinConfig_.primaryFontFamily.empty()
+            ? NunitoFontFamily()
+            : skinConfig_.primaryFontFamily.c_str();
+    const float fontSize =
+        skinConfig_.baseFontSize > 0.0f ? skinConfig_.baseFontSize : 18.0f;
+
+    const bool nunitoAvailable = EnsureNunitoFontLoaded();
+    nunitoFontCollection_ = CreateNunitoFontCollection(dwriteFactory_.Get());
+    const bool useNunitoCollection =
+        primaryFont &&
+        std::wcscmp(primaryFont, NunitoFontFamily()) == 0;
+    if (useNunitoCollection && !nunitoAvailable && !nunitoFontCollection_) {
+        return false;
+    }
+    { Microsoft::WRL::ComPtr<IDWriteFontCollection> coll; dwriteFactory_->GetSystemFontCollection(&coll, TRUE); }
     hr = dwriteFactory_->CreateTextFormat(
-        L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_LIGHT,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 18.0f, L"zh-CN",
-        &textFormat_);
+        primaryFont,
+        useNunitoCollection ? nunitoFontCollection_.Get() : nullptr,
+        DWRITE_FONT_WEIGHT_REGULAR,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, fontSize,
+        L"zh-CN", &textFormat_);
     if (FAILED(hr)) {
         return false;
     }
-    textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-    textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    waveformView_ = std::make_shared<WaveformView>();
-    keyboard_ = std::make_shared<VirtualKeyboard>();
+    ApplyChineseFontFallback(dwriteFactory_.Get(), textFormat_.Get());
     return createDeviceResources();
 }
 
@@ -66,111 +144,96 @@ void Direct2DContext::resize(UINT width, UINT height) {
     if (renderTarget_) {
         renderTarget_->Resize(D2D1::SizeU(width, height));
     }
-    updateLayout();
+    layoutDirty_ = true;
 }
 
 void Direct2DContext::handleDeviceLost() {
     discardDeviceResources();
     createDeviceResources();
-    updateLayout();
+    layoutDirty_ = true;
 }
 
-void Direct2DContext::setSliders(
-    std::vector<std::shared_ptr<ParameterSlider>> sliders) {
-    sliders_ = std::move(sliders);
-    updateLayout();
+void Direct2DContext::setModel(UIModel model) {
+    model_ = std::move(model);
+    rebuildLayout();
 }
 
-void Direct2DContext::setWaveformSamples(const std::vector<float>& samples) {
-    if (!waveformView_) {
-        waveformView_ = std::make_shared<WaveformView>();
+void Direct2DContext::updateWaveformSamples(
+    const std::vector<float>& samples) {
+    model_.waveformSamples = samples;
+    if (flowNode_) {
+        flowNode_->setWaveformSamples(samples);
     }
-    waveformView_->setSamples(samples);
 }
 
-void Direct2DContext::setKeyboardCallback(std::function<void(double)> callback) {
-    if (!keyboard_) {
-        keyboard_ = std::make_shared<VirtualKeyboard>();
+void Direct2DContext::syncSliders() {
+    if (knobPanelNode_) {
+        knobPanelNode_->syncKnobs();
     }
-    keyboard_->setCallback(std::move(callback));
-}
-
-void Direct2DContext::setPresetCallbacks(std::function<void()> onLoad,
-                                         std::function<void()> onSave) {
-    buttons_.clear();
-    if (onLoad) {
-        buttons_.push_back(Button{L"加载预设", {}, std::move(onLoad), false});
-    }
-    if (onSave) {
-        buttons_.push_back(Button{L"保存预设", {}, std::move(onSave), false});
-    }
-    updateLayout();
-}
-
-void Direct2DContext::setStatusText(std::wstring status) {
-    statusText_ = std::move(status);
-}
-
-void Direct2DContext::setKeyboardKeys(
-    const std::vector<std::pair<std::wstring, double>>& keys) {
-    if (!keyboard_) {
-        keyboard_ = std::make_shared<VirtualKeyboard>();
-    }
-    keyboard_->setKeys(keys);
-    updateLayout();
 }
 
 bool Direct2DContext::onPointerDown(float x, float y) {
-    for (auto& slider : sliders_) {
-        if (slider->onPointerDown(x, y)) {
-            activeSlider_ = slider;
-            return true;
-        }
-    }
-    if (keyboard_ && keyboard_->onPointerDown(x, y)) {
-        return true;
-    }
-    if (hitButton(x, y)) {
-        return true;
+    if (rootLayout_) {
+        return rootLayout_->onPointerDown(x, y);
     }
     return false;
 }
 
 bool Direct2DContext::onPointerMove(float x, float y) {
-    if (activeSlider_) {
-        return activeSlider_->onPointerMove(x, y);
-    }
-    if (keyboard_ && keyboard_->onPointerMove(x, y)) {
-        return true;
-    }
-    if (activeButton_) {
-        const bool inside = x >= activeButton_->bounds.left &&
-                            x <= activeButton_->bounds.right &&
-                            y >= activeButton_->bounds.top &&
-                            y <= activeButton_->bounds.bottom;
-        activeButton_->pressed = inside;
-        return inside;
+    if (rootLayout_) {
+        return rootLayout_->onPointerMove(x, y);
     }
     return false;
 }
 
 void Direct2DContext::onPointerUp() {
-    if (activeSlider_) {
-        activeSlider_->onPointerUp();
-        activeSlider_.reset();
+    if (rootLayout_) {
+        rootLayout_->onPointerUp();
     }
-    if (keyboard_) {
-        keyboard_->onPointerUp();
+}
+
+void Direct2DContext::setLayoutDebugEnabled(bool enabled) {
+    layoutDebugEnabled_ = enabled;
+}
+
+void Direct2DContext::toggleLayoutDebug() {
+    layoutDebugEnabled_ = !layoutDebugEnabled_;
+}
+
+void Direct2DContext::dumpLayoutDebugInfo() {
+    if (!rootLayout_) {
+        return;
     }
-    if (activeButton_) {
-        const bool execute = activeButton_->pressed;
-        activeButton_->pressed = false;
-        auto callback = activeButton_->onClick;
-        activeButton_ = nullptr;
-        if (execute && callback) {
-            callback();
-        }
+
+    auto formatRect = [](const D2D1_RECT_F& r) {
+        std::wstringstream ss;
+        ss << L"(" << static_cast<int>(r.left) << L"," << static_cast<int>(r.top)
+           << L")-(" << static_cast<int>(r.right) << L","
+           << static_cast<int>(r.bottom) << L")";
+        return ss.str();
+    };
+
+    std::wstringstream output;
+    output << L"[SatoriWin][Layout] client=" << width_ << L"x" << height_
+           << L"\n";
+    output << L"  root      " << formatRect(rootLayout_->bounds()) << L"\n";
+    if (topBarNode_) {
+        output << L"  topbar    " << formatRect(topBarNode_->bounds()) << L"\n";
     }
+    if (flowNode_) {
+        output << L"  flow      " << formatRect(flowNode_->bounds()) << L"\n";
+    }
+    if (knobPanelNode_) {
+        output << L"  knobs     " << formatRect(knobPanelNode_->bounds())
+               << L"\n";
+    }
+    if (keyboardNode_) {
+        output << L"  keyboard  " << formatRect(keyboardNode_->bounds())
+               << L"\n";
+    }
+
+    const auto text = output.str();
+    OutputDebugStringW(text.c_str());
 }
 
 bool Direct2DContext::createDeviceResources() {
@@ -193,33 +256,29 @@ bool Direct2DContext::createDeviceResources() {
         return false;
     }
 
-    hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.4f, 0.7f, 0.9f, 1.0f), &accentBrush_);
+    const SkinBrushColors colors = MakeBrushColors(skinConfig_);
+
+    hr = renderTarget_->CreateSolidColorBrush(colors.accent, &accentBrush_);
     if (FAILED(hr)) {
         return false;
     }
-    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.9f, 0.9f, 0.95f, 1.0f),
-                                              &textBrush_);
+    hr = renderTarget_->CreateSolidColorBrush(colors.text, &textBrush_);
     if (FAILED(hr)) {
         return false;
     }
-    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.15f, 0.15f, 0.2f, 1.0f),
-                                              &trackBrush_);
+    hr = renderTarget_->CreateSolidColorBrush(colors.track, &trackBrush_);
     if (FAILED(hr)) {
         return false;
     }
-    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.25f, 0.55f, 0.75f, 1.0f),
-                                              &fillBrush_);
+    hr = renderTarget_->CreateSolidColorBrush(colors.fill, &fillBrush_);
     if (FAILED(hr)) {
         return false;
     }
-    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.12f, 0.15f, 0.2f, 1.0f),
-                                              &panelBrush_);
+    hr = renderTarget_->CreateSolidColorBrush(colors.panel, &panelBrush_);
     if (FAILED(hr)) {
         return false;
     }
-    hr = renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0.35f, 0.4f, 0.45f, 1.0f),
-                                              &gridBrush_);
+    hr = renderTarget_->CreateSolidColorBrush(colors.grid, &gridBrush_);
     if (FAILED(hr)) {
         return false;
     }
@@ -240,75 +299,30 @@ void Direct2DContext::render() {
     if (!createDeviceResources()) {
         return;
     }
+    ensureLayout();
+
     renderTarget_->BeginDraw();
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
-    renderTarget_->Clear(D2D1::ColorF(0.07f, 0.07f, 0.09f));
 
-    if (panelBrush_) {
-        RECT rc{};
-        GetClientRect(hwnd_, &rc);
+    // 先用深色清屏，再按皮肤策略决定是否用 panelBrush 覆盖主背景。
+    // Serum 原型皮肤下保留更暗的整体背景，只让各面板自己填充 panelBrush，
+    // 以便中部参数/流程图面板在视觉上比主背景“浮起”一层。
+    D2D1_COLOR_F clearColor = D2D1::ColorF(0.07f, 0.07f, 0.09f);
+    if (skinConfig_.id == UISkinId::kSerumPrototype) {
+        clearColor = D2D1::ColorF(0.02f, 0.03f, 0.05f);
+    }
+    renderTarget_->Clear(clearColor);
+
+    if (panelBrush_ && skinConfig_.id != UISkinId::kSerumPrototype) {
         const auto bgRect =
-            D2D1::RectF(static_cast<float>(rc.left) + 12.0f,
-                        static_cast<float>(rc.top) + 12.0f,
-                        static_cast<float>(rc.right) - 12.0f,
-                        static_cast<float>(rc.bottom) - 12.0f);
+            D2D1::RectF(0.0f, 0.0f, static_cast<float>(width_),
+                        static_cast<float>(height_));
         renderTarget_->FillRectangle(bgRect, panelBrush_.Get());
     }
 
-    if (textBrush_ && textFormat_) {
-        RECT rc{};
-        GetClientRect(hwnd_, &rc);
-        const float margin = 24.0f;
-        const float instructionWidth = 360.0f;
-        const float instructionHeight = 120.0f;
-        const D2D1_RECT_F layoutRect =
-            D2D1::RectF(static_cast<FLOAT>(rc.left) + margin,
-                        static_cast<FLOAT>(rc.top) + margin,
-                        static_cast<FLOAT>(rc.left) + margin + instructionWidth,
-                        static_cast<FLOAT>(rc.top) + margin + instructionHeight);
-        renderTarget_->DrawText(
-            kInstructionText, static_cast<UINT32>(wcslen(kInstructionText)),
-            textFormat_.Get(), layoutRect, textBrush_.Get());
-        if (!statusText_.empty()) {
-            const D2D1_RECT_F statusRect =
-                D2D1::RectF(static_cast<FLOAT>(rc.right) - margin - instructionWidth,
-                            static_cast<FLOAT>(rc.top) + margin,
-                            static_cast<FLOAT>(rc.right) - margin,
-                            static_cast<FLOAT>(rc.top) + margin + 96.0f);
-            renderTarget_->DrawText(statusText_.c_str(),
-                                    static_cast<UINT32>(statusText_.size()),
-                                    textFormat_.Get(), statusRect,
-                                    textBrush_.Get());
-        }
-    }
-
-    if (!buttons_.empty() && textFormat_ && fillBrush_ && accentBrush_) {
-        for (const auto& button : buttons_) {
-            auto* brush = button.pressed ? accentBrush_.Get() : fillBrush_.Get();
-            renderTarget_->FillRectangle(button.bounds, brush);
-            renderTarget_->DrawRectangle(button.bounds, accentBrush_.Get(), 1.5f);
-            renderTarget_->DrawText(
-                button.label.c_str(), static_cast<UINT32>(button.label.size()),
-                textFormat_.Get(), button.bounds, textBrush_.Get());
-        }
-    }
-
-    if (waveformView_ && panelBrush_ && gridBrush_ && accentBrush_) {
-        waveformView_->draw(renderTarget_.Get(), panelBrush_.Get(), gridBrush_.Get(),
-                            accentBrush_.Get());
-    }
-
-    if (!sliders_.empty() && trackBrush_ && fillBrush_ && accentBrush_ &&
-        textBrush_ && textFormat_) {
-        for (const auto& slider : sliders_) {
-            slider->draw(renderTarget_.Get(), trackBrush_.Get(), fillBrush_.Get(),
-                         accentBrush_.Get(), textBrush_.Get(), textFormat_.Get());
-        }
-    }
-
-    if (keyboard_ && accentBrush_ && textFormat_ && panelBrush_) {
-        keyboard_->draw(renderTarget_.Get(), accentBrush_.Get(), panelBrush_.Get(),
-                        fillBrush_.Get(), textFormat_.Get());
+    if (rootLayout_) {
+        rootLayout_->draw(makeResources());
+        drawLayoutDebug();
     }
 
     HRESULT hr = renderTarget_->EndDraw();
@@ -317,104 +331,95 @@ void Direct2DContext::render() {
     }
 }
 
-void Direct2DContext::updateLayout() {
-    if (width_ == 0 || height_ == 0) {
+void Direct2DContext::rebuildLayout() {
+    auto topBar = std::make_shared<TopBarNode>();
+    topBar->setTitle(L"Satori");
+    topBar->setSampleRate(model_.sampleRate);
+    topBar->setAudioOnline(model_.audioOnline);
+    topBar->setStatusText(model_.status.primary);
+    topBarNode_ = topBar;
+
+    flowNode_ = std::make_shared<FlowDiagramNode>();
+    flowNode_->setDiagramState(model_.diagram);
+    flowNode_->setWaveformSamples(model_.waveformSamples);
+
+    knobPanelNode_ = std::make_shared<KnobPanelNode>();
+    knobPanelNode_->setDescriptors(model_.sliders);
+
+    keyboardNode_ = std::make_shared<KeyboardNode>();
+    keyboardNode_->setKeys(model_.keys, model_.keyCallback);
+
+    auto mainStack = std::make_shared<UIStackPanel>(8.0f);
+    mainStack->setItems({
+        {flowNode_, {UISizeMode::kPercent, 0.55f, 260.0f}},
+        {knobPanelNode_, {UISizeMode::kPercent, 0.45f, 200.0f}},
+    });
+
+    auto rootStack = std::make_shared<UIStackPanel>(8.0f);
+    rootStack->setItems({
+        {topBar, {UISizeMode::kFixed, 40.0f, 32.0f}},
+        {mainStack, {UISizeMode::kAuto, 0.0f, 400.0f}},
+        {keyboardNode_, {UISizeMode::kFixed, 120.0f, 110.0f}},
+    });
+
+    rootLayout_ = rootStack;
+    layoutDirty_ = true;
+}
+
+void Direct2DContext::ensureLayout() {
+    if (!rootLayout_) {
+        rebuildLayout();
+    }
+    if (!rootLayout_) {
         return;
     }
-    if (!waveformView_) {
-        waveformView_ = std::make_shared<WaveformView>();
+    if (!layoutDirty_) {
+        return;
     }
-    if (!keyboard_) {
-        keyboard_ = std::make_shared<VirtualKeyboard>();
-    }
-    const float margin = 40.0f;
-    const float instructionHeight = 120.0f;
-    const float availableWidth = static_cast<float>(width_) - 2.0f * margin;
-    const float buttonHeight = 36.0f;
+    const auto bounds =
+        D2D1::RectF(0.0f, 0.0f, static_cast<float>(width_),
+                    static_cast<float>(height_));
+    rootLayout_->arrange(bounds);
+    layoutDirty_ = false;
+}
 
-    float buttonX = margin;
-    const float buttonTop = margin + instructionHeight + 12.0f;
-    for (auto& button : buttons_) {
-        button.bounds = D2D1::RectF(buttonX, buttonTop, buttonX + 120.0f,
-                                    buttonTop + buttonHeight);
-        buttonX += 132.0f;
+void Direct2DContext::drawLayoutDebug() {
+    if (!layoutDebugEnabled_ || !renderTarget_ || !gridBrush_) {
+        return;
     }
 
-    const float keyboardHeight = 110.0f;
-    const float keyboardTop =
-        static_cast<float>(height_) - margin - keyboardHeight;
-    keyboard_->setBounds(D2D1::RectF(margin, keyboardTop, margin + availableWidth,
-                                     keyboardTop + keyboardHeight));
+    auto drawRect = [&](const D2D1_RECT_F& rect) {
+        renderTarget_->DrawRectangle(rect, gridBrush_.Get(), 1.0f);
+    };
 
-    const float contentTop = buttonTop + buttonHeight + 20.0f;
-    float contentBottom = keyboardTop - 20.0f;
-    if (contentBottom <= contentTop + 40.0f) {
-        contentBottom = contentTop + 40.0f;
+    drawRect(rootLayout_->bounds());
+    if (topBarNode_) {
+        drawRect(topBarNode_->bounds());
     }
-    const float contentHeight = contentBottom - contentTop;
-
-    float waveformHeight = std::max(100.0f, contentHeight * 0.6f);
-    float sliderAreaHeight = contentHeight - waveformHeight;
-    if (sliderAreaHeight < 80.0f) {
-        sliderAreaHeight = 80.0f;
-        waveformHeight = std::max(60.0f, contentHeight - sliderAreaHeight);
+    if (flowNode_) {
+        drawRect(flowNode_->bounds());
     }
-    if (waveformHeight < 80.0f) {
-        waveformHeight = 80.0f;
-        sliderAreaHeight = std::max(40.0f, contentHeight - waveformHeight);
+    if (knobPanelNode_) {
+        drawRect(knobPanelNode_->bounds());
     }
-    const float waveformTop = contentTop;
-    const float waveformBottom =
-        std::min(contentBottom - sliderAreaHeight, waveformTop + waveformHeight);
-    waveformView_->setBounds(
-        D2D1::RectF(margin, waveformTop, margin + availableWidth, waveformBottom));
-
-    float sliderAreaTop = waveformBottom + 20.0f;
-    float sliderAreaBottom = contentBottom;
-    if (sliderAreaBottom - sliderAreaTop < 40.0f) {
-        sliderAreaTop = sliderAreaBottom - 40.0f;
-    }
-    float sliderAreaHeightFinal = sliderAreaBottom - sliderAreaTop;
-
-    if (!sliders_.empty()) {
-        const float spacing = 16.0f;
-        const std::size_t sliderCount = sliders_.size();
-        const float totalSpacing =
-            spacing * static_cast<float>(sliderCount > 0 ? sliderCount - 1 : 0);
-        const float eachHeight =
-            std::max(40.0f,
-                     (sliderAreaHeightFinal - totalSpacing) /
-                         static_cast<float>(std::max<std::size_t>(1, sliderCount)));
-        float y = sliderAreaTop;
-        for (auto& slider : sliders_) {
-            if (!slider) {
-                continue;
-            }
-            if (y >= sliderAreaBottom) {
-                break;
-            }
-            const float bottom = std::min(y + eachHeight, sliderAreaBottom);
-            slider->setBounds(
-                D2D1::RectF(margin, y, margin + availableWidth, bottom));
-            y = bottom + spacing;
-        }
-    }
-
-    if (keyboard_) {
-        keyboard_->layoutKeys();
+    if (keyboardNode_) {
+        drawRect(keyboardNode_->bounds());
     }
 }
 
-bool Direct2DContext::hitButton(float x, float y) {
-    for (auto& button : buttons_) {
-        if (x >= button.bounds.left && x <= button.bounds.right &&
-            y >= button.bounds.top && y <= button.bounds.bottom) {
-            button.pressed = true;
-            activeButton_ = &button;
-            return true;
-        }
-    }
-    return false;
+RenderResources Direct2DContext::makeResources() {
+    RenderResources resources;
+    resources.target = renderTarget_.Get();
+    resources.accentBrush = accentBrush_.Get();
+    resources.textBrush = textBrush_.Get();
+    resources.trackBrush = trackBrush_.Get();
+    resources.fillBrush = fillBrush_.Get();
+    resources.panelBrush = panelBrush_.Get();
+    resources.gridBrush = gridBrush_.Get();
+    resources.textFormat = textFormat_.Get();
+    resources.skinId = skinConfig_.id;
+    resources.skin = &skinResources_;
+    return resources;
 }
 
 }  // namespace winui

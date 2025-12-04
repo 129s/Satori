@@ -11,12 +11,16 @@
 #include "win/app/PresetManager.h"
 #include "win/audio/SatoriRealtimeEngine.h"
 #include "win/ui/Direct2DContext.h"
-#include "win/ui/ParameterSlider.h"
+#include "win/ui/UIModel.h"
 
 namespace {
 
 const wchar_t kWindowClassName[] = L"SatoriWinClass";
 const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
+
+// 推荐窗口客户端区域尺寸（也是本迭代的最小可用尺寸）
+constexpr int kMinClientWidth = 1280;
+constexpr int kMinClientHeight = 720;
 
 std::unique_ptr<winaudio::SatoriRealtimeEngine> g_engine;
 std::unique_ptr<winui::Direct2DContext> g_d2d;
@@ -26,12 +30,7 @@ HWND g_mainWindow = nullptr;
 bool g_audioReady = false;
 std::wstring g_audioStatus = L"音频：未初始化";
 std::wstring g_presetStatus = L"预设：默认";
-
-struct SliderBinding {
-    std::shared_ptr<winui::ParameterSlider> slider;
-    float* value = nullptr;
-};
-std::vector<SliderBinding> g_sliderBindings;
+std::vector<float> g_waveformSamples;
 
 const std::vector<std::pair<std::wstring, double>> kVirtualKeys = {
     {L"C4", 261.63}, {L"D4", 293.66}, {L"E4", 329.63}, {L"F4", 349.23},
@@ -71,19 +70,8 @@ std::filesystem::path GetExecutableDir() {
     return exePath.remove_filename();
 }
 
-void RefreshStatusText() {
-    if (!g_d2d) {
-        return;
-    }
-    std::wstring combined = g_audioStatus;
-    if (!g_presetStatus.empty()) {
-        combined += L"\n" + g_presetStatus;
-    }
-    g_d2d->setStatusText(combined);
-    if (g_mainWindow) {
-        InvalidateRect(g_mainWindow, nullptr, FALSE);
-    }
-}
+void RefreshUI();
+winui::UIModel BuildUIModel();
 
 void UpdateAudioStatus(HWND hwnd, bool showDialog) {
     if (g_audioReady) {
@@ -105,12 +93,12 @@ void UpdateAudioStatus(HWND hwnd, bool showDialog) {
                         MB_ICONWARNING | MB_OK);
         }
     }
-    RefreshStatusText();
+    RefreshUI();
 }
 
 void UpdatePresetStatus(const std::wstring& text) {
     g_presetStatus = text;
-    RefreshStatusText();
+    RefreshUI();
 }
 
 void SyncSynthConfig() {
@@ -130,13 +118,8 @@ std::vector<float> GenerateWaveform(double frequency) {
     return samples;
 }
 
-void ApplyConfigToSliders() {
-    for (const auto& binding : g_sliderBindings) {
-        if (binding.slider && binding.value) {
-            binding.slider->syncValue(*binding.value);
-        }
-    }
-}
+void HandleLoadPreset();
+void HandleSavePreset();
 
 void TriggerFrequency(double frequency) {
     if (frequency <= 0.0) {
@@ -146,28 +129,69 @@ void TriggerFrequency(double frequency) {
         g_engine->triggerNote(frequency, 2.0);
     }
     if (g_d2d) {
-        g_d2d->setWaveformSamples(GenerateWaveform(frequency));
+        g_waveformSamples = GenerateWaveform(frequency);
+        g_d2d->updateWaveformSamples(g_waveformSamples);
     }
     if (g_mainWindow) {
         InvalidateRect(g_mainWindow, nullptr, FALSE);
     }
 }
 
-void HandleLoadPreset();
-void HandleSavePreset();
+winui::UIModel BuildUIModel() {
+    winui::UIModel model;
+    model.status.primary = g_audioStatus;
+    model.waveformSamples = g_waveformSamples;
+    model.audioOnline = g_audioReady;
+    model.sampleRate = static_cast<float>(g_synthConfig.sampleRate);
+    model.diagram.decay = g_synthConfig.decay;
+    model.diagram.brightness = g_synthConfig.brightness;
+    model.diagram.pickPosition = g_synthConfig.pickPosition;
+    model.diagram.noiseType =
+        (g_synthConfig.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
+
+    auto addSlider = [&](const std::wstring& label, float min, float max,
+                         float& field) {
+        winui::SliderDescriptor desc;
+        desc.label = label;
+        desc.min = min;
+        desc.max = max;
+        desc.getter = [&field]() { return field; };
+        desc.setter = [&field](float value) {
+            field = value;
+            SyncSynthConfig();
+        };
+        model.sliders.push_back(std::move(desc));
+    };
+    addSlider(L"Decay", 0.90f, 0.999f, g_synthConfig.decay);
+    addSlider(L"Brightness", 0.0f, 1.0f, g_synthConfig.brightness);
+    addSlider(L"Pick Position", 0.05f, 0.95f, g_synthConfig.pickPosition);
+
+    for (const auto& key : kVirtualKeys) {
+        model.keys.push_back({key.first, key.second});
+    }
+    model.keyCallback = [](double freq) { TriggerFrequency(freq); };
+
+    return model;
+}
+
+void RefreshUI() {
+    if (!g_d2d) {
+        return;
+    }
+    g_d2d->setModel(BuildUIModel());
+}
 
 void InitializePresetSupport(HWND hwnd) {
     const auto presetDir = GetExecutableDir() / L"presets";
     g_presetManager = std::make_unique<winapp::PresetManager>(presetDir);
-    if (g_d2d) {
-        g_d2d->setPresetCallbacks(HandleLoadPreset, HandleSavePreset);
-    }
     const auto defaultPreset = g_presetManager->defaultPresetPath();
     if (std::filesystem::exists(defaultPreset)) {
         std::wstring error;
         if (g_presetManager->load(defaultPreset, g_synthConfig, error)) {
             SyncSynthConfig();
-            ApplyConfigToSliders();
+            if (g_d2d) {
+                g_d2d->syncSliders();
+            }
             UpdatePresetStatus(L"预设：" + defaultPreset.filename().wstring());
         } else if (hwnd) {
             MessageBoxW(hwnd, error.c_str(), kWindowTitle, MB_ICONWARNING | MB_OK);
@@ -195,7 +219,9 @@ void HandleLoadPreset() {
         return;
     }
     SyncSynthConfig();
-    ApplyConfigToSliders();
+    if (g_d2d) {
+        g_d2d->syncSliders();
+    }
     UpdatePresetStatus(L"预设：" + path.filename().wstring());
 }
 
@@ -230,30 +256,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
 
             g_synthConfig = g_engine->synthConfig();
-            g_sliderBindings.clear();
-            std::vector<std::shared_ptr<winui::ParameterSlider>> sliders;
-            auto bindSlider = [&](const std::wstring& label, float min, float max,
-                                  float& field) {
-                float* valuePtr = &field;
-                auto slider = std::make_shared<winui::ParameterSlider>(
-                    label, min, max, field,
-                    [valuePtr](float value) {
-                        *valuePtr = value;
-                        SyncSynthConfig();
-                    });
-                g_sliderBindings.push_back(SliderBinding{slider, valuePtr});
-                sliders.push_back(std::move(slider));
-            };
-            bindSlider(L"Decay", 0.90f, 0.999f, g_synthConfig.decay);
-            bindSlider(L"Brightness", 0.0f, 1.0f, g_synthConfig.brightness);
-            bindSlider(L"Pick Position", 0.05f, 0.95f, g_synthConfig.pickPosition);
-            g_d2d->setSliders(sliders);
-            g_d2d->setKeyboardKeys(kVirtualKeys);
-            g_d2d->setKeyboardCallback(
-                [](double frequency) { TriggerFrequency(frequency); });
             InitializePresetSupport(hwnd);
+            RefreshUI();
             UpdateAudioStatus(hwnd, !g_audioReady);
-            RefreshStatusText();
+            return 0;
+        }
+        case WM_GETMINMAXINFO: {
+            // 约束窗口最小尺寸，保证客户端区域不小于 1280x720 左右
+            auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+            RECT rect{0, 0, kMinClientWidth, kMinClientHeight};
+            AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
+            info->ptMinTrackSize.x = rect.right - rect.left;
+            info->ptMinTrackSize.y = rect.bottom - rect.top;
             return 0;
         }
         case WM_SIZE: {
@@ -272,6 +286,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
         case WM_KEYDOWN: {
+            if (wparam == VK_F12) {
+                // F12：切换布局调试模式（绘制布局边界）
+                if (g_d2d) {
+                    g_d2d->toggleLayoutDebug();
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
+            if (wparam == VK_F11) {
+                // F11：导出一次布局信息到调试输出，便于脚本/比对
+                if (g_d2d) {
+                    g_d2d->dumpLayoutDebugInfo();
+                }
+                return 0;
+            }
+
             const double freq = KeyToFrequency(wparam);
             if (freq > 0.0) {
                 TriggerFrequency(freq);
@@ -288,7 +318,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             break;
         }
         case WM_MOUSEMOVE: {
-            if ((wparam & MK_LBUTTON) && g_d2d &&
+            if (g_d2d &&
                 g_d2d->onPointerMove(static_cast<float>(GET_X_LPARAM(lparam)),
                                      static_cast<float>(GET_Y_LPARAM(lparam)))) {
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -334,11 +364,17 @@ ATOM RegisterSatoriWindowClass(HINSTANCE instance) {
 }
 
 HWND CreateSatoriWindow(HINSTANCE instance) {
+    // 计算给定客户端区域（1280x720）对应的窗口外框尺寸
+    RECT rect{0, 0, kMinClientWidth, kMinClientHeight};
+    AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+
     return CreateWindowExW(
         0, kWindowClassName, kWindowTitle,
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        960, 640,
+        width, height,
         nullptr, nullptr, instance, nullptr);
 }
 

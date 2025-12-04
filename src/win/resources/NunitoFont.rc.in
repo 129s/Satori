@@ -1,0 +1,3 @@
+#include "win/resources/ResourceIds.h"
+
+IDR_FONT_NUNITO_REGULAR RCDATA "@NUNITO_FONT_NATIVE_ESC@"

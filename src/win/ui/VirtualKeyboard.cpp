@@ -36,11 +36,19 @@ void VirtualKeyboard::draw(ID2D1HwndRenderTarget* target,
         return;
     }
     for (const auto& key : keys_) {
-        auto* brush = key.pressed ? activeBrush : fillBrush;
-        target->FillRectangle(key.bounds, brush);
+        ID2D1SolidColorBrush* fill = fillBrush;
+        if (key.pressed) {
+            // 按下：高亮显示
+            fill = activeBrush;
+        } else if (key.hovered) {
+            // hover：比正常略亮，但弱于按下
+            fill = borderBrush;
+        }
+        target->FillRectangle(key.bounds, fill);
         target->DrawRectangle(key.bounds, borderBrush, 1.0f);
-        target->DrawText(key.label.c_str(), static_cast<UINT32>(key.label.size()),
-                         textFormat, key.bounds, borderBrush);
+        target->DrawText(key.label.c_str(),
+                         static_cast<UINT32>(key.label.size()), textFormat,
+                         key.bounds, borderBrush);
     }
 }
 
@@ -56,18 +64,31 @@ bool VirtualKeyboard::onPointerDown(float x, float y) {
 }
 
 bool VirtualKeyboard::onPointerMove(float x, float y) {
-    if (!dragging_) {
-        return false;
-    }
-    Key* key = hitTest(x, y);
-    if (key && key != activeKey_) {
-        if (activeKey_) {
-            activeKey_->pressed = false;
+    bool handled = false;
+
+    if (dragging_) {
+        Key* key = hitTest(x, y);
+        if (key && key != activeKey_) {
+            if (activeKey_) {
+                activeKey_->pressed = false;
+            }
+            activeKey_ = key;
+            triggerKey(key);
         }
-        activeKey_ = key;
-        triggerKey(key);
+        handled = key != nullptr;
     }
-    return key != nullptr;
+
+    // 更新 hover 状态，独立于拖拽逻辑
+    for (auto& key : keys_) {
+        const bool inside = x >= key.bounds.left && x <= key.bounds.right &&
+                            y >= key.bounds.top && y <= key.bounds.bottom;
+        if (key.hovered != inside) {
+            key.hovered = inside;
+            handled = true;
+        }
+    }
+
+    return handled;
 }
 
 void VirtualKeyboard::onPointerUp() {
@@ -75,6 +96,9 @@ void VirtualKeyboard::onPointerUp() {
     if (activeKey_) {
         activeKey_->pressed = false;
         activeKey_ = nullptr;
+    }
+    for (auto& key : keys_) {
+        key.hovered = false;
     }
 }
 

@@ -48,6 +48,20 @@ void ParameterSlider::draw(ID2D1HwndRenderTarget* target,
         return;
     }
 
+    // 根据 hover/drag 状态调整视觉权重，保持与按钮/键盘一致的反馈层级
+    ID2D1SolidColorBrush* track = trackBrush;
+    ID2D1SolidColorBrush* fill = fillBrush;
+    ID2D1SolidColorBrush* knob = knobBrush;
+    if (hovered_ && !dragging_) {
+        // hover：略提升填充亮度
+        track = fillBrush;
+    }
+    if (dragging_) {
+        // 按下/拖拽：使用强调色突出滑块与已选区
+        track = fillBrush;
+        fill = knobBrush;
+    }
+
     // Draw label
     D2D1_RECT_F labelRect =
         D2D1::RectF(bounds_.left, bounds_.top, bounds_.right, bounds_.top + 24.0f);
@@ -55,19 +69,19 @@ void ParameterSlider::draw(ID2D1HwndRenderTarget* target,
                      textFormat, labelRect, textBrush);
 
     // Draw track and fill
-    target->FillRectangle(trackRect_, trackBrush);
+    target->FillRectangle(trackRect_, track);
     const float width = trackRect_.right - trackRect_.left;
     const float normalized = (value_ - min_) / (max_ - min_);
     D2D1_RECT_F fillRect = trackRect_;
     fillRect.right = trackRect_.left + normalized * width;
-    target->FillRectangle(fillRect, fillBrush);
+    target->FillRectangle(fillRect, fill);
 
     // Draw knob
     const float knobWidth = 6.0f;
     D2D1_RECT_F knobRect =
         D2D1::RectF(fillRect.right - knobWidth, trackRect_.top - 6.0f,
                     fillRect.right + knobWidth, trackRect_.bottom + 6.0f);
-    target->FillRectangle(knobRect, knobBrush);
+    target->FillRectangle(knobRect, knob);
 
     // Draw value text
     wchar_t buffer[64];
@@ -109,20 +123,31 @@ bool ParameterSlider::onPointerDown(float x, float y) {
         return false;
     }
     dragging_ = true;
+    hovered_ = true;
     setValue(positionToValue(x), true);
     return true;
 }
 
 bool ParameterSlider::onPointerMove(float x, float y) {
-    if (!dragging_) {
-        return false;
+    const bool inside = hitTest(x, y);
+    bool changed = false;
+
+    if (dragging_) {
+        setValue(positionToValue(x), true);
+        changed = true;
     }
-    setValue(positionToValue(x), true);
-    return true;
+
+    if (hovered_ != inside) {
+        hovered_ = inside;
+        changed = true;
+    }
+
+    return changed;
 }
 
 void ParameterSlider::onPointerUp() {
     dragging_ = false;
+    // 保留 hovered_ 状态，由后续鼠标移动事件更新
 }
 
 void ParameterSlider::syncValue(float value) {
