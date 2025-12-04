@@ -1,9 +1,11 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "win/ui/DebugOverlay.h"
 #include "win/ui/ParameterKnob.h"
 #include "win/ui/UIModel.h"
 #include "win/ui/layout/UILayoutNode.h"
@@ -25,6 +27,7 @@ public:
     bool onPointerDown(float x, float y) override;
     bool onPointerMove(float x, float y) override;
     void onPointerUp() override;
+    std::optional<DebugBoxModel> debugBoxForPoint(float x, float y) const;
 
 private:
     struct KnobEntry {
@@ -44,7 +47,7 @@ private:
     float padding_ = 8.0f;
 
     void rebuildGroups(const std::vector<SliderDescriptor>& descriptors);
+    std::shared_ptr<ParameterKnob> activeKnob() const;
 };
 
 }  // namespace winui
-

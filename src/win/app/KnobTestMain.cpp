@@ -8,12 +8,15 @@
 #include <wrl/client.h>
 
 #include <cmath>
+#include <optional>
 #include <vector>
 
 #include <algorithm>
 #include <memory>
 #include <string>
 
+#include "win/ui/D2DHelpers.h"
+#include "win/ui/DebugOverlay.h"
 #include "win/ui/NunitoFont.h"
 #include "win/ui/ParameterKnob.h"
 
@@ -39,8 +42,75 @@ ComPtr<ID2D1SolidColorBrush> g_textBrush;
 ComPtr<IDWriteTextFormat> g_textFormat;
 ComPtr<IDWriteFontCollection1> g_nunitoFontCollection;
 
+const winui::DebugOverlayPalette kSandboxOverlayPalette =
+    winui::MakeUnifiedDebugOverlayPalette();
+
 std::unique_ptr<winui::ParameterKnob> g_knob;
-bool g_debugBoxes = false;
+winui::DebugOverlayMode g_debugOverlayMode = winui::DebugOverlayMode::kOff;
+winui::DebugBoxRenderer g_debugRenderer;
+std::optional<winui::DebugBoxModel> g_hoverDebugModel;
+bool g_trackingMouseLeave = false;
+bool g_hasPointerPosition = false;
+float g_lastPointerX = 0.0f;
+float g_lastPointerY = 0.0f;
+
+bool DebugModelsEqual(const winui::DebugBoxModel& lhs,
+                      const winui::DebugBoxModel& rhs) {
+    if (lhs.segments.size() != rhs.segments.size()) {
+        return false;
+    }
+    const float kTolerance = 0.25f;
+    auto rectClose = [&](const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
+        return std::fabs(a.left - b.left) < kTolerance &&
+               std::fabs(a.top - b.top) < kTolerance &&
+               std::fabs(a.right - b.right) < kTolerance &&
+               std::fabs(a.bottom - b.bottom) < kTolerance;
+    };
+    for (std::size_t i = 0; i < lhs.segments.size(); ++i) {
+        const auto& a = lhs.segments[i];
+        const auto& b = rhs.segments[i];
+        if (a.layer != b.layer || !rectClose(a.rect, b.rect)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool UpdateHoverDebugSelection(float x, float y) {
+    if (!g_knob || g_debugOverlayMode != winui::DebugOverlayMode::kBoxModel) {
+        if (g_hoverDebugModel) {
+            g_hoverDebugModel.reset();
+            return true;
+        }
+        return false;
+    }
+    winui::DebugBoxModel next{};
+    bool shouldHighlight = false;
+    if (g_knob->isDragging() || g_knob->contains(x, y)) {
+        next = g_knob->debugBoxModel();
+        shouldHighlight = !next.segments.empty();
+    }
+    if (!shouldHighlight) {
+        if (g_hoverDebugModel) {
+            g_hoverDebugModel.reset();
+            return true;
+        }
+        return false;
+    }
+    if (g_hoverDebugModel && DebugModelsEqual(*g_hoverDebugModel, next)) {
+        return false;
+    }
+    g_hoverDebugModel = std::move(next);
+    return true;
+}
+
+bool ClearHoverDebugSelection() {
+    if (!g_hoverDebugModel) {
+        return false;
+    }
+    g_hoverDebugModel.reset();
+    return true;
+}
 
 IDWriteFontCollection* EnsureNunitoFontCollection() {
     if (!g_dwriteFactory) {
@@ -274,6 +344,8 @@ HRESULT CreateDeviceResources(HWND hwnd) {
         return hr;
     }
 
+    g_debugRenderer.setPalette(kSandboxOverlayPalette);
+
     LayoutKnob(static_cast<float>(width), static_cast<float>(height));
     return S_OK;
 }
@@ -285,6 +357,7 @@ void DiscardDeviceResources() {
     g_fillBrush.Reset();
     g_accentBrush.Reset();
     g_textBrush.Reset();
+    g_debugRenderer.setPalette(kSandboxOverlayPalette);
 }
 
 void OnResize(UINT width, UINT height) {
@@ -321,6 +394,12 @@ void OnRender() {
 
     g_knob->draw(g_renderTarget.Get(), g_baseBrush.Get(), g_fillBrush.Get(),
                  g_accentBrush.Get(), g_textBrush.Get(), g_textFormat.Get());
+    if (g_debugOverlayMode == winui::DebugOverlayMode::kBoxModel &&
+        g_hoverDebugModel) {
+        winui::ScopedAntialiasMode scoped(g_renderTarget.Get(),
+                                          D2D1_ANTIALIAS_MODE_ALIASED);
+        g_debugRenderer.render(g_renderTarget.Get(), *g_hoverDebugModel, true);
+    }
 
     const HRESULT hr = g_renderTarget->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
@@ -340,8 +419,6 @@ void EnsureKnob() {
             swprintf_s(buffer, L"Knob value: %.3f\n", value);
             OutputDebugStringW(buffer);
         });
-
-    g_knob->setDebugEnabled(g_debugBoxes);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd,
@@ -376,8 +453,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd,
             EnsureKnob();
             const float x = static_cast<float>(GET_X_LPARAM(lparam));
             const float y = static_cast<float>(GET_Y_LPARAM(lparam));
-            if (g_knob->onPointerDown(x, y)) {
+            g_hasPointerPosition = true;
+            g_lastPointerX = x;
+            g_lastPointerY = y;
+            bool handled = g_knob && g_knob->onPointerDown(x, y);
+            bool selectionChanged = UpdateHoverDebugSelection(x, y);
+            if (handled) {
                 SetCapture(hwnd);
+            }
+            if (handled || selectionChanged) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
@@ -387,9 +471,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd,
             if (!g_knob) {
                 break;
             }
+            if (!g_trackingMouseLeave) {
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                if (TrackMouseEvent(&tme)) {
+                    g_trackingMouseLeave = true;
+                }
+            }
             const float x = static_cast<float>(GET_X_LPARAM(lparam));
             const float y = static_cast<float>(GET_Y_LPARAM(lparam));
-            if (g_knob->onPointerMove(x, y)) {
+            g_hasPointerPosition = true;
+            g_lastPointerX = x;
+            g_lastPointerY = y;
+            bool handled = g_knob->onPointerMove(x, y);
+            bool selectionChanged = UpdateHoverDebugSelection(x, y);
+            if (handled || selectionChanged) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
@@ -399,6 +497,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd,
             if (g_knob) {
                 g_knob->onPointerUp();
             }
+            const float x = static_cast<float>(GET_X_LPARAM(lparam));
+            const float y = static_cast<float>(GET_Y_LPARAM(lparam));
+            g_hasPointerPosition = true;
+            g_lastPointerX = x;
+            g_lastPointerY = y;
+            UpdateHoverDebugSelection(x, y);
             ReleaseCapture();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -406,14 +510,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd,
         case WM_KEYDOWN: {
             if (wparam == VK_F12) {
                 // F12：切换开发者调试模式，显示类似“盒模型”的边框。
-                g_debugBoxes = !g_debugBoxes;
-                if (g_knob) {
-                    g_knob->setDebugEnabled(g_debugBoxes);
+                g_debugOverlayMode =
+                    (g_debugOverlayMode == winui::DebugOverlayMode::kOff)
+                        ? winui::DebugOverlayMode::kBoxModel
+                        : winui::DebugOverlayMode::kOff;
+                if (g_hasPointerPosition) {
+                    UpdateHoverDebugSelection(g_lastPointerX, g_lastPointerY);
+                } else {
+                    ClearHoverDebugSelection();
                 }
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
             break;
+        }
+        case WM_MOUSELEAVE: {
+            g_trackingMouseLeave = false;
+            g_hasPointerPosition = false;
+            if (ClearHoverDebugSelection()) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
         }
         case WM_DESTROY:
             DiscardDeviceResources();

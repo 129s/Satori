@@ -4,7 +4,51 @@
 
 #include <d2d1helper.h>
 
+#include "win/ui/DebugOverlay.h"
+
 namespace winui {
+
+namespace {
+bool ContainsPoint(const D2D1_RECT_F& rect, float x, float y) {
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+bool IsRectValid(const D2D1_RECT_F& rect) {
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+DebugBoxModel MakeGroupBox(const D2D1_RECT_F& bounds,
+                           float padding,
+                           float titleHeight) {
+    DebugBoxModel model{};
+    if (!IsRectValid(bounds)) {
+        return model;
+    }
+    model.segments.push_back({DebugBoxLayer::kBorder, bounds});
+
+    const auto inner = D2D1::RectF(bounds.left + padding, bounds.top + padding,
+                                   bounds.right - padding,
+                                   bounds.bottom - padding);
+    if (!IsRectValid(inner)) {
+        return model;
+    }
+    model.segments.push_back({DebugBoxLayer::kPadding, inner});
+
+    const float knobAreaTop = inner.top + titleHeight + 6.0f;
+    const auto knobRect =
+        D2D1::RectF(inner.left, knobAreaTop, inner.right, inner.bottom);
+    if (!IsRectValid(knobRect)) {
+        return model;
+    }
+    const auto content =
+        D2D1::RectF(knobRect.left + padding, knobRect.top + padding,
+                    knobRect.right - padding, knobRect.bottom - padding);
+    if (IsRectValid(content)) {
+        model.segments.push_back({DebugBoxLayer::kContent, content});
+    }
+    return model;
+}
+}  // namespace
 
 KnobPanelNode::KnobPanelNode() = default;
 
@@ -129,6 +173,7 @@ void KnobPanelNode::draw(const RenderResources& resources) {
                              resources.fillBrush, resources.accentBrush,
                              resources.textBrush, resources.textFormat);
         }
+
     }
 }
 
@@ -163,6 +208,32 @@ void KnobPanelNode::onPointerUp() {
             }
         }
     }
+}
+
+std::optional<DebugBoxModel> KnobPanelNode::debugBoxForPoint(float x,
+                                                             float y) const {
+    if (auto knob = activeKnob()) {
+        return knob->debugBoxModel();
+    }
+
+    for (const auto& group : groups_) {
+        for (const auto& entry : group.knobs) {
+            if (entry.knob && entry.knob->contains(x, y)) {
+                return entry.knob->debugBoxModel();
+            }
+        }
+    }
+
+    for (const auto& group : groups_) {
+        if (ContainsPoint(group.bounds, x, y)) {
+            return MakeGroupBox(group.bounds, padding_, 18.0f);
+        }
+    }
+
+    if (ContainsPoint(bounds_, x, y)) {
+        return MakeGroupBox(bounds_, padding_, 20.0f);
+    }
+    return std::nullopt;
 }
 
 void KnobPanelNode::rebuildGroups(
@@ -222,5 +293,15 @@ void KnobPanelNode::rebuildGroups(
     }
 }
 
-}  // namespace winui
+std::shared_ptr<ParameterKnob> KnobPanelNode::activeKnob() const {
+    for (const auto& group : groups_) {
+        for (const auto& entry : group.knobs) {
+            if (entry.knob && entry.knob->isDragging()) {
+                return entry.knob;
+            }
+        }
+    }
+    return nullptr;
+}
 
+}  // namespace winui

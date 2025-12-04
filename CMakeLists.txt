@@ -55,6 +55,7 @@ if (WIN32)
         src/win/app/PresetManager.cpp
         src/win/ui/ParameterSlider.cpp
         src/win/ui/ParameterKnob.cpp
+        src/win/ui/DebugOverlay.cpp
         src/win/ui/Direct2DContext.cpp
         src/win/ui/layout/UIStackPanel.cpp
         src/win/ui/layout/UIOverlay.cpp
@@ -73,14 +74,22 @@ if (WIN32)
     )
     target_sources(SatoriWinApp PRIVATE "${NUNITO_FONT_RC}")
     target_link_libraries(SatoriWinApp PRIVATE SatoriRealtimeWin d2d1.lib dwrite.lib)
+    target_compile_definitions(SatoriWinApp PRIVATE
+        $<$<CONFIG:Debug>:SATORI_ENABLE_UI_DEBUG=1>)
 
     add_executable(SatoriKnobSandbox WIN32
         src/win/app/KnobTestMain.cpp
         src/win/ui/ParameterKnob.cpp
+        src/win/ui/DebugOverlay.cpp
     )
     target_sources(SatoriKnobSandbox PRIVATE "${NUNITO_FONT_RC}")
     target_include_directories(SatoriKnobSandbox PRIVATE src)
     target_link_libraries(SatoriKnobSandbox PRIVATE d2d1.lib dwrite.lib)
+    target_compile_definitions(SatoriKnobSandbox PRIVATE SATORI_ENABLE_UI_DEBUG=1)
+    if (MSVC)
+        set_target_properties(SatoriKnobSandbox PROPERTIES
+            EXCLUDE_FROM_DEFAULT_BUILD_RELEASE TRUE)
+    endif()
 endif()
 
 add_library(Catch2Amalgamated STATIC

@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,6 +14,7 @@
 #include <dwrite_3.h>
 #include <wrl/client.h>
 
+#include "win/ui/DebugOverlay.h"
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
 #include "win/ui/layout/UILayoutNode.h"
@@ -44,9 +46,11 @@ public:
     bool onPointerDown(float x, float y);
     bool onPointerMove(float x, float y);
     void onPointerUp();
+    bool onPointerLeave();
+    bool hasPointerCapture() const { return pointerCaptured_; }
 
-    void setLayoutDebugEnabled(bool enabled);
-    void toggleLayoutDebug();
+    void setDebugOverlayMode(DebugOverlayMode mode);
+    void toggleDebugOverlay();
     void dumpLayoutDebugInfo();
 
 private:
@@ -55,7 +59,11 @@ private:
     void rebuildLayout();
     void ensureLayout();
     RenderResources makeResources();
-    void drawLayoutDebug();
+    void drawDebugOverlay();
+    void applyDebugOverlayState();
+    bool updateDebugSelection(float x, float y);
+    bool clearDebugSelection();
+    std::optional<DebugBoxModel> pickDebugSelection(float x, float y) const;
 
     HWND hwnd_ = nullptr;
     UINT width_ = 0;
@@ -77,7 +85,18 @@ private:
 
     UIModel model_;
     bool layoutDirty_ = true;
-    bool layoutDebugEnabled_ = false;
+    DebugOverlayMode debugOverlayMode_ = DebugOverlayMode::kOff;
+    DebugOverlayPalette debugOverlayPalette_{};
+    DebugBoxRenderer debugBoxRenderer_;
+#if SATORI_UI_DEBUG_ENABLED
+    std::optional<DebugBoxModel> hoverDebugModel_;
+    bool pointerCaptured_ = false;
+    bool pointerInside_ = false;
+    bool hasPointerPosition_ = false;
+    D2D1_POINT_2F lastPointerPosition_{};
+#else
+    bool pointerCaptured_ = false;
+#endif
     std::shared_ptr<UILayoutNode> rootLayout_;
     std::shared_ptr<TopBarNode> topBarNode_;
     std::shared_ptr<FlowDiagramNode> flowNode_;

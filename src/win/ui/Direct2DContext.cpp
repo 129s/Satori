@@ -1,11 +1,13 @@
 #include "win/ui/Direct2DContext.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cwchar>
 #include <sstream>
 
 #include <d2d1helper.h>
 
+#include "win/ui/D2DHelpers.h"
 #include "win/ui/NunitoFont.h"
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
@@ -50,11 +52,71 @@ SkinBrushColors MakeBrushColors() {
     return colors;
 }
 
+bool IsRectValid(const D2D1_RECT_F& rect) {
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+D2D1_RECT_F InsetRect(const D2D1_RECT_F& rect, float inset) {
+    return D2D1::RectF(rect.left + inset, rect.top + inset,
+                       rect.right - inset, rect.bottom - inset);
+}
+
+bool ContainsPoint(const D2D1_RECT_F& rect, float x, float y) {
+    return x >= rect.left && x <= rect.right && y >= rect.top &&
+           y <= rect.bottom;
+}
+
+DebugBoxModel MakeLayoutBox(const D2D1_RECT_F& rect) {
+    DebugBoxModel model{};
+    if (!IsRectValid(rect)) {
+        return model;
+    }
+    model.segments.push_back({DebugBoxLayer::kBorder, rect});
+
+    const float paddingInset = 6.0f;
+    const auto padding = InsetRect(rect, paddingInset);
+    if (IsRectValid(padding)) {
+        model.segments.push_back({DebugBoxLayer::kPadding, padding});
+
+        const float contentInset = 8.0f;
+        const auto content = InsetRect(padding, contentInset);
+        if (IsRectValid(content)) {
+            model.segments.push_back({DebugBoxLayer::kContent, content});
+        }
+    }
+    return model;
+}
+
+bool AreRectsClose(const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
+    const float kTolerance = 0.25f;
+    return std::fabs(a.left - b.left) < kTolerance &&
+           std::fabs(a.top - b.top) < kTolerance &&
+           std::fabs(a.right - b.right) < kTolerance &&
+           std::fabs(a.bottom - b.bottom) < kTolerance;
+}
+
+bool AreModelsEqual(const DebugBoxModel& lhs, const DebugBoxModel& rhs) {
+    if (lhs.segments.size() != rhs.segments.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < lhs.segments.size(); ++i) {
+        const auto& a = lhs.segments[i];
+        const auto& b = rhs.segments[i];
+        if (a.layer != b.layer || !AreRectsClose(a.rect, b.rect)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 Direct2DContext::Direct2DContext() {
     skinConfig_ = MakeDefaultSkinConfig();
     skinResources_.config = skinConfig_;
+#if SATORI_UI_DEBUG_ENABLED
+    debugOverlayPalette_ = MakeUnifiedDebugOverlayPalette();
+#endif
 }
 Direct2DContext::~Direct2DContext() = default;
 
@@ -146,31 +208,89 @@ void Direct2DContext::syncSliders() {
 }
 
 bool Direct2DContext::onPointerDown(float x, float y) {
+#if SATORI_UI_DEBUG_ENABLED
+    pointerInside_ = true;
+    hasPointerPosition_ = true;
+    lastPointerPosition_ = D2D1::Point2F(x, y);
+#endif
+    bool handled = false;
     if (rootLayout_) {
-        return rootLayout_->onPointerDown(x, y);
+        handled = rootLayout_->onPointerDown(x, y);
     }
-    return false;
+    pointerCaptured_ = handled;
+#if SATORI_UI_DEBUG_ENABLED
+    const bool selectionChanged = updateDebugSelection(x, y);
+    return handled || selectionChanged;
+#else
+    return handled;
+#endif
 }
 
 bool Direct2DContext::onPointerMove(float x, float y) {
+#if SATORI_UI_DEBUG_ENABLED
+    pointerInside_ = true;
+    hasPointerPosition_ = true;
+    lastPointerPosition_ = D2D1::Point2F(x, y);
+#endif
+    bool handled = false;
     if (rootLayout_) {
-        return rootLayout_->onPointerMove(x, y);
+        handled = rootLayout_->onPointerMove(x, y);
     }
-    return false;
+#if SATORI_UI_DEBUG_ENABLED
+    const bool selectionChanged = updateDebugSelection(x, y);
+    return handled || selectionChanged;
+#else
+    return handled;
+#endif
 }
 
 void Direct2DContext::onPointerUp() {
     if (rootLayout_) {
         rootLayout_->onPointerUp();
     }
+#if SATORI_UI_DEBUG_ENABLED
+    pointerCaptured_ = false;
+    if (hasPointerPosition_) {
+        updateDebugSelection(lastPointerPosition_.x, lastPointerPosition_.y);
+    }
+#else
+    pointerCaptured_ = false;
+#endif
 }
 
-void Direct2DContext::setLayoutDebugEnabled(bool enabled) {
-    layoutDebugEnabled_ = enabled;
+bool Direct2DContext::onPointerLeave() {
+#if SATORI_UI_DEBUG_ENABLED
+    pointerInside_ = false;
+    hasPointerPosition_ = false;
+    if (pointerCaptured_) {
+        return false;
+    }
+    return clearDebugSelection();
+#else
+    return false;
+#endif
 }
 
-void Direct2DContext::toggleLayoutDebug() {
-    layoutDebugEnabled_ = !layoutDebugEnabled_;
+void Direct2DContext::setDebugOverlayMode(DebugOverlayMode mode) {
+#if SATORI_UI_DEBUG_ENABLED
+    if (debugOverlayMode_ == mode) {
+        return;
+    }
+    debugOverlayMode_ = mode;
+    applyDebugOverlayState();
+#else
+    (void)mode;
+#endif
+}
+
+void Direct2DContext::toggleDebugOverlay() {
+#if SATORI_UI_DEBUG_ENABLED
+    const auto nextMode =
+        debugOverlayMode_ == DebugOverlayMode::kOff
+            ? DebugOverlayMode::kBoxModel
+            : DebugOverlayMode::kOff;
+    setDebugOverlayMode(nextMode);
+#endif
 }
 
 void Direct2DContext::dumpLayoutDebugInfo() {
@@ -255,6 +375,8 @@ bool Direct2DContext::createDeviceResources() {
     if (FAILED(hr)) {
         return false;
     }
+    debugOverlayPalette_ = MakeUnifiedDebugOverlayPalette();
+    debugBoxRenderer_.setPalette(debugOverlayPalette_);
     return true;
 }
 
@@ -266,6 +388,7 @@ void Direct2DContext::discardDeviceResources() {
     panelBrush_.Reset();
     gridBrush_.Reset();
     renderTarget_.Reset();
+    debugBoxRenderer_.setPalette(debugOverlayPalette_);
 }
 
 void Direct2DContext::render() {
@@ -289,7 +412,9 @@ void Direct2DContext::render() {
 
     if (rootLayout_) {
         rootLayout_->draw(makeResources());
-        drawLayoutDebug();
+#if SATORI_UI_DEBUG_ENABLED
+        drawDebugOverlay();
+#endif
     }
 
     HRESULT hr = renderTarget_->EndDraw();
@@ -312,6 +437,9 @@ void Direct2DContext::rebuildLayout() {
 
     knobPanelNode_ = std::make_shared<KnobPanelNode>();
     knobPanelNode_->setDescriptors(model_.sliders);
+#if SATORI_UI_DEBUG_ENABLED
+    applyDebugOverlayState();
+#endif
 
     keyboardNode_ = std::make_shared<KeyboardNode>();
     keyboardNode_->setKeys(model_.keys, model_.keyCallback);
@@ -350,28 +478,108 @@ void Direct2DContext::ensureLayout() {
     layoutDirty_ = false;
 }
 
-void Direct2DContext::drawLayoutDebug() {
-    if (!layoutDebugEnabled_ || !renderTarget_ || !gridBrush_) {
+void Direct2DContext::drawDebugOverlay() {
+#if SATORI_UI_DEBUG_ENABLED
+    if (debugOverlayMode_ != DebugOverlayMode::kBoxModel || !renderTarget_ ||
+        !rootLayout_) {
         return;
     }
+    if (!hoverDebugModel_) {
+        return;
+    }
+    ScopedAntialiasMode scoped(renderTarget_.Get(),
+                               D2D1_ANTIALIAS_MODE_ALIASED);
+    debugBoxRenderer_.render(renderTarget_.Get(), *hoverDebugModel_, true);
+#endif
+}
 
-    auto drawRect = [&](const D2D1_RECT_F& rect) {
-        renderTarget_->DrawRectangle(rect, gridBrush_.Get(), 1.0f);
+void Direct2DContext::applyDebugOverlayState() {
+#if SATORI_UI_DEBUG_ENABLED
+    if (debugOverlayMode_ != DebugOverlayMode::kBoxModel) {
+        clearDebugSelection();
+        return;
+    }
+    if (hasPointerPosition_) {
+        updateDebugSelection(lastPointerPosition_.x, lastPointerPosition_.y);
+    }
+#endif
+}
+
+bool Direct2DContext::updateDebugSelection(float x, float y) {
+#if SATORI_UI_DEBUG_ENABLED
+    if (debugOverlayMode_ != DebugOverlayMode::kBoxModel) {
+        return clearDebugSelection();
+    }
+    if (!pointerCaptured_ && !pointerInside_) {
+        return clearDebugSelection();
+    }
+    auto selection = pickDebugSelection(x, y);
+    if (!selection.has_value()) {
+        return clearDebugSelection();
+    }
+    if (hoverDebugModel_ && AreModelsEqual(*hoverDebugModel_, *selection)) {
+        return false;
+    }
+    hoverDebugModel_ = std::move(selection);
+    return true;
+#else
+    (void)x;
+    (void)y;
+    return false;
+#endif
+}
+
+bool Direct2DContext::clearDebugSelection() {
+#if SATORI_UI_DEBUG_ENABLED
+    if (!hoverDebugModel_) {
+        return false;
+    }
+    hoverDebugModel_.reset();
+    return true;
+#else
+    return false;
+#endif
+}
+
+std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
+                                                                 float y) const {
+#if SATORI_UI_DEBUG_ENABLED
+    if (!rootLayout_) {
+        return std::nullopt;
+    }
+
+    if (knobPanelNode_) {
+        if (auto panel = knobPanelNode_->debugBoxForPoint(x, y)) {
+            return panel;
+        }
+    }
+
+    auto checkNode =
+        [&](const std::shared_ptr<UILayoutNode>& node) -> std::optional<DebugBoxModel> {
+        if (node && ContainsPoint(node->bounds(), x, y)) {
+            return MakeLayoutBox(node->bounds());
+        }
+        return std::nullopt;
     };
 
-    drawRect(rootLayout_->bounds());
-    if (topBarNode_) {
-        drawRect(topBarNode_->bounds());
+    if (auto flowSelection = checkNode(flowNode_)) {
+        return flowSelection;
     }
-    if (flowNode_) {
-        drawRect(flowNode_->bounds());
+    if (auto keyboardSelection = checkNode(keyboardNode_)) {
+        return keyboardSelection;
     }
-    if (knobPanelNode_) {
-        drawRect(knobPanelNode_->bounds());
+    if (auto topSelection = checkNode(topBarNode_)) {
+        return topSelection;
     }
-    if (keyboardNode_) {
-        drawRect(keyboardNode_->bounds());
+    if (ContainsPoint(rootLayout_->bounds(), x, y)) {
+        return MakeLayoutBox(rootLayout_->bounds());
     }
+    return std::nullopt;
+#else
+    (void)x;
+    (void)y;
+    return std::nullopt;
+#endif
 }
 
 RenderResources Direct2DContext::makeResources() {

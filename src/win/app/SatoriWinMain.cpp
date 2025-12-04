@@ -31,6 +31,9 @@ bool g_audioReady = false;
 std::wstring g_audioStatus = L"音频：未初始化";
 std::wstring g_presetStatus = L"预设：默认";
 std::vector<float> g_waveformSamples;
+#if SATORI_UI_DEBUG_ENABLED
+bool g_trackingMouseLeave = false;
+#endif
 
 const std::vector<std::pair<std::wstring, double>> kVirtualKeys = {
     {L"C4", 261.63}, {L"D4", 293.66}, {L"E4", 329.63}, {L"F4", 349.23},
@@ -286,14 +289,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
         case WM_KEYDOWN: {
+#if SATORI_UI_DEBUG_ENABLED
             if (wparam == VK_F12) {
-                // F12：切换布局调试模式（绘制布局边界）
+                // F12：切换调试叠加（布局边界 + 旋钮盒模型）
                 if (g_d2d) {
-                    g_d2d->toggleLayoutDebug();
+                    g_d2d->toggleDebugOverlay();
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 return 0;
             }
+#endif
             if (wparam == VK_F11) {
                 // F11：导出一次布局信息到调试输出，便于脚本/比对
                 if (g_d2d) {
@@ -311,13 +316,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_LBUTTONDOWN: {
             if (g_d2d && g_d2d->onPointerDown(static_cast<float>(GET_X_LPARAM(lparam)),
                                               static_cast<float>(GET_Y_LPARAM(lparam)))) {
-                SetCapture(hwnd);
+                if (g_d2d->hasPointerCapture()) {
+                    SetCapture(hwnd);
+                }
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
             break;
         }
         case WM_MOUSEMOVE: {
+#if SATORI_UI_DEBUG_ENABLED
+            if (!g_trackingMouseLeave) {
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                if (TrackMouseEvent(&tme)) {
+                    g_trackingMouseLeave = true;
+                }
+            }
+#endif
             if (g_d2d &&
                 g_d2d->onPointerMove(static_cast<float>(GET_X_LPARAM(lparam)),
                                      static_cast<float>(GET_Y_LPARAM(lparam)))) {
@@ -331,6 +349,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 g_d2d->onPointerUp();
             }
             ReleaseCapture();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_MOUSELEAVE: {
+#if SATORI_UI_DEBUG_ENABLED
+            g_trackingMouseLeave = false;
+            if (g_d2d && g_d2d->onPointerLeave()) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+#endif
             return 0;
         }
         case WM_DESTROY:

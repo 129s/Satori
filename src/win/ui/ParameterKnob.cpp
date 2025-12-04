@@ -52,6 +52,10 @@ namespace {
 float Clamp(float value, float min, float max) {
     return std::max(min, std::min(max, value));
 }
+
+bool IsRectValid(const D2D1_RECT_F& rect) {
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
 }  // namespace
 
 using Microsoft::WRL::ComPtr;
@@ -71,10 +75,7 @@ ParameterKnob::ParameterKnob(std::wstring label,
 
 void ParameterKnob::setBounds(const D2D1_RECT_F& bounds) {
     bounds_ = bounds;
-}
-
-void ParameterKnob::setDebugEnabled(bool enabled) {
-    debugEnabled_ = enabled;
+    debugRectsValid_ = false;
 }
 
 void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
@@ -87,6 +88,8 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
         !textFormat) {
         return;
     }
+
+    debugRectsValid_ = false;
 
     constexpr float kPi = 3.1415926f;
 
@@ -106,6 +109,8 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
     const float contentRight = bounds_.right - outerPaddingX;
     const float contentTop = bounds_.top + outerPaddingTop;
     const float contentBottom = bounds_.bottom - outerPaddingBottom;
+    const auto contentRect =
+        D2D1::RectF(contentLeft, contentTop, contentRight, contentBottom);
     const float contentWidth = contentRight - contentLeft;
     const float contentHeight = contentBottom - contentTop;
     if (contentWidth <= 0.0f || contentHeight <= 0.0f) {
@@ -366,26 +371,14 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
     }
 
 
-    // 开发者调试模式：绘制近似“盒模型”边框，帮助观察布局。
-    if (debugEnabled_) {
-        ID2D1SolidColorBrush* outerBrush = textBrush;
-        ID2D1SolidColorBrush* innerBrush =
-            accentBrush ? accentBrush : textBrush;
-
-        // 整个控件的外框（对应单元格边界）。
-        target->DrawRectangle(bounds_, outerBrush, 1.0f);
-
-        // 值槽外缘的包围盒（代表主要视觉体积）。
-        const auto slotRect = D2D1::RectF(
-            center.x - outerRadius,
-            center.y - outerRadius,
-            center.x + outerRadius,
-            center.y + outerRadius);
-        target->DrawRectangle(slotRect, innerBrush, 1.0f);
-
-        // 标签区域。
-        target->DrawRectangle(labelOuterRect, innerBrush, 1.0f);
-    }
+    // 调试叠加：以统一盒模型样式绘制外框。
+#if SATORI_UI_DEBUG_ENABLED
+    const auto slotRect = D2D1::RectF(center.x - outerRadius,
+                                      center.y - outerRadius,
+                                      center.x + outerRadius,
+                                      center.y + outerRadius);
+    updateDebugRects(bounds_, slotRect, labelOuterRect);
+#endif
 }
 
 bool ParameterKnob::hitTest(float x, float y) const {
@@ -445,6 +438,60 @@ void ParameterKnob::onPointerUp() {
 
 void ParameterKnob::syncValue(float value) {
     setValue(value, false);
+}
+
+bool ParameterKnob::contains(float x, float y) const {
+    return hitTest(x, y);
+}
+
+DebugBoxModel ParameterKnob::debugBoxModel() const {
+#if SATORI_UI_DEBUG_ENABLED
+    DebugBoxModel model{};
+    auto push = [&](DebugBoxLayer layer, const D2D1_RECT_F& rect) {
+        if (IsRectValid(rect)) {
+            model.segments.push_back({layer, rect});
+        }
+    };
+    if (debugRectsValid_) {
+        push(DebugBoxLayer::kBorder, debugBorderRect_);
+        push(DebugBoxLayer::kPadding, debugPaddingRect_);
+        push(DebugBoxLayer::kContent, debugContentRect_);
+        if (!model.segments.empty()) {
+            return model;
+        }
+    }
+
+    push(DebugBoxLayer::kBorder, bounds_);
+    const float paddingInset = 6.0f;
+    const auto padding =
+        D2D1::RectF(bounds_.left + paddingInset, bounds_.top + paddingInset,
+                    bounds_.right - paddingInset, bounds_.bottom - paddingInset);
+    push(DebugBoxLayer::kPadding, padding);
+    const float contentInset = 4.0f;
+    const auto content =
+        D2D1::RectF(padding.left + contentInset, padding.top + contentInset,
+                    padding.right - contentInset,
+                    padding.bottom - contentInset);
+    push(DebugBoxLayer::kContent, content);
+    return model;
+#else
+    return {};
+#endif
+}
+
+void ParameterKnob::updateDebugRects(const D2D1_RECT_F& border,
+                                     const D2D1_RECT_F& padding,
+                                     const D2D1_RECT_F& content) const {
+#if SATORI_UI_DEBUG_ENABLED
+    debugBorderRect_ = border;
+    debugPaddingRect_ = padding;
+    debugContentRect_ = content;
+    debugRectsValid_ = IsRectValid(border);
+#else
+    (void)border;
+    (void)padding;
+    (void)content;
+#endif
 }
 
 }  // namespace winui

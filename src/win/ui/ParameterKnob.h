@@ -6,6 +6,8 @@
 #include <d2d1.h>
 #include <dwrite.h>
 
+#include "win/ui/DebugOverlay.h"
+
 namespace winui {
 
 class ParameterKnob {
@@ -19,7 +21,6 @@ public:
                   Callback onChange);
 
     void setBounds(const D2D1_RECT_F& bounds);
-    void setDebugEnabled(bool enabled);
 
     void draw(ID2D1HwndRenderTarget* target,
               ID2D1SolidColorBrush* baseBrush,
@@ -33,10 +34,16 @@ public:
     void onPointerUp();
 
     void syncValue(float value);
+    bool contains(float x, float y) const;
+    bool isDragging() const { return dragging_; }
+    DebugBoxModel debugBoxModel() const;
 
 private:
     bool hitTest(float x, float y) const;
     void setValue(float value, bool notify);
+    void updateDebugRects(const D2D1_RECT_F& border,
+                          const D2D1_RECT_F& padding,
+                          const D2D1_RECT_F& content) const;
 
     std::wstring label_;
     float min_ = 0.0f;
@@ -47,9 +54,12 @@ private:
     D2D1_RECT_F bounds_{};
     bool hovered_ = false;
     bool dragging_ = false;
-    bool debugEnabled_ = false;
     float dragStartY_ = 0.0f;
     float dragStartValue_ = 0.0f;
+    mutable bool debugRectsValid_ = false;
+    mutable D2D1_RECT_F debugBorderRect_{};
+    mutable D2D1_RECT_F debugPaddingRect_{};
+    mutable D2D1_RECT_F debugContentRect_{};
 };
 
 }  // namespace winui
