@@ -29,19 +29,6 @@ UISkinConfig MakeDefaultSkinConfig() {
     return config;
 }
 
-UISkinConfig MakeSerumPrototypeSkinConfig() {
-    UISkinConfig config;
-    config.id = UISkinId::kSerumPrototype;
-    config.name = L"Serum Prototype";
-    // 仅作为项目自有 Serum 风格资源的推荐目录占位，实际素材需单独整理到该目录。
-    config.assetsBaseDir = L"assets/ui/serum_theme";
-    // Serum UI 常见配色会搭配类似 Nunito 的圆角无衬线字体，这里以 Nunito 为首选，
-    // 并依赖 assets/Fonts/Nunito-Regular.ttf 私有字体确保可用。
-    config.primaryFontFamily = L"Nunito";
-    config.baseFontSize = 17.0f;
-    return config;
-}
-
 struct SkinBrushColors {
     D2D1_COLOR_F accent{};
     D2D1_COLOR_F text{};
@@ -51,36 +38,22 @@ struct SkinBrushColors {
     D2D1_COLOR_F grid{};
 };
 
-SkinBrushColors MakeBrushColors(const UISkinConfig& skinConfig) {
+SkinBrushColors MakeBrushColors() {
     SkinBrushColors colors{};
-    if (skinConfig.id == UISkinId::kSerumPrototype) {
-        // Serum 风格：更亮的强调色、略偏蓝绿的填充与更深的背景。
-        colors.accent = D2D1::ColorF(0.95f, 0.98f, 1.0f, 1.0f);
-        colors.text = D2D1::ColorF(0.90f, 0.95f, 1.0f, 1.0f);
-        colors.track = D2D1::ColorF(0.11f, 0.13f, 0.17f, 1.0f);
-        colors.fill = D2D1::ColorF(0.24f, 0.50f, 0.78f, 1.0f);
-        colors.panel = D2D1::ColorF(0.06f, 0.08f, 0.12f, 1.0f);
-        colors.grid = D2D1::ColorF(0.35f, 0.40f, 0.48f, 1.0f);
-    } else {
-        // 默认主题保持现有颜色，避免影响既有体验。
-        colors.accent = D2D1::ColorF(0.4f, 0.7f, 0.9f, 1.0f);
-        colors.text = D2D1::ColorF(0.9f, 0.9f, 0.95f, 1.0f);
-        colors.track = D2D1::ColorF(0.15f, 0.15f, 0.2f, 1.0f);
-        colors.fill = D2D1::ColorF(0.25f, 0.55f, 0.75f, 1.0f);
-        colors.panel = D2D1::ColorF(0.12f, 0.15f, 0.2f, 1.0f);
-        colors.grid = D2D1::ColorF(0.35f, 0.4f, 0.45f, 1.0f);
-    }
+    // 颜色方案借鉴 Serum UI 氛围，但固定为当前默认主题，不再提供独立皮肤切换。
+    colors.accent = D2D1::ColorF(0.4f, 0.7f, 0.9f, 1.0f);
+    colors.text = D2D1::ColorF(0.9f, 0.9f, 0.95f, 1.0f);
+    colors.track = D2D1::ColorF(0.15f, 0.15f, 0.2f, 1.0f);
+    colors.fill = D2D1::ColorF(0.25f, 0.55f, 0.75f, 1.0f);
+    colors.panel = D2D1::ColorF(0.12f, 0.15f, 0.2f, 1.0f);
+    colors.grid = D2D1::ColorF(0.35f, 0.4f, 0.45f, 1.0f);
     return colors;
 }
 
 }  // namespace
 
 Direct2DContext::Direct2DContext() {
-#ifdef SATORI_ENABLE_SERUM_SKIN
-    skinConfig_ = MakeSerumPrototypeSkinConfig();
-#else
     skinConfig_ = MakeDefaultSkinConfig();
-#endif
     skinResources_.config = skinConfig_;
 }
 Direct2DContext::~Direct2DContext() = default;
@@ -256,7 +229,7 @@ bool Direct2DContext::createDeviceResources() {
         return false;
     }
 
-    const SkinBrushColors colors = MakeBrushColors(skinConfig_);
+    const SkinBrushColors colors = MakeBrushColors();
 
     hr = renderTarget_->CreateSolidColorBrush(colors.accent, &accentBrush_);
     if (FAILED(hr)) {
@@ -304,16 +277,10 @@ void Direct2DContext::render() {
     renderTarget_->BeginDraw();
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    // 先用深色清屏，再按皮肤策略决定是否用 panelBrush 覆盖主背景。
-    // Serum 原型皮肤下保留更暗的整体背景，只让各面板自己填充 panelBrush，
-    // 以便中部参数/流程图面板在视觉上比主背景“浮起”一层。
     D2D1_COLOR_F clearColor = D2D1::ColorF(0.07f, 0.07f, 0.09f);
-    if (skinConfig_.id == UISkinId::kSerumPrototype) {
-        clearColor = D2D1::ColorF(0.02f, 0.03f, 0.05f);
-    }
     renderTarget_->Clear(clearColor);
 
-    if (panelBrush_ && skinConfig_.id != UISkinId::kSerumPrototype) {
+    if (panelBrush_) {
         const auto bgRect =
             D2D1::RectF(0.0f, 0.0f, static_cast<float>(width_),
                         static_cast<float>(height_));

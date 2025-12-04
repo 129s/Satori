@@ -4,10 +4,8 @@
 
 namespace winui {
 
-// 非持久化的皮肤标识，用于在代码中区分不同主题。
 enum class UISkinId {
     kDefault = 0,
-    kSerumPrototype = 1,
 };
 
 // 皮肤的静态配置（不依赖具体图形 API），集中描述名称、字体与资源目录。
@@ -15,9 +13,7 @@ struct UISkinConfig {
     UISkinId id = UISkinId::kDefault;
     std::wstring name;
 
-    // 项目自有 UI 资源所在的基础目录，例如：
-    // - L"assets/ui/default"
-    // - L"assets/ui/serum_theme"
+    // 项目自有 UI 资源所在的基础目录，例如 L"assets/ui/default"。
     std::wstring assetsBaseDir;
 
     // 文本渲染首选字体及字号（若字体不可用，调用方应自行回退）。
@@ -34,4 +30,3 @@ struct UISkinResources {
 };
 
 }  // namespace winui
-

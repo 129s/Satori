@@ -41,18 +41,6 @@ void KeyboardNode::draw(const RenderResources& resources) {
     ID2D1SolidColorBrush* fillBrush = resources.panelBrush;
     ID2D1SolidColorBrush* activeBrush = resources.fillBrush;
 
-    // Serum 原型主题下，适当调整键盘对比度：
-    // - 边框稍暗（使用 gridBrush / trackBrush），
-    // - 普通键使用更深的轨道色，
-    // - 按下键使用最亮的强调色。
-    if (resources.skinId == UISkinId::kSerumPrototype) {
-        borderBrush =
-            resources.gridBrush ? resources.gridBrush : resources.accentBrush;
-        fillBrush =
-            resources.trackBrush ? resources.trackBrush : resources.panelBrush;
-        activeBrush = resources.accentBrush ? resources.accentBrush : activeBrush;
-    }
-
     keyboard_.draw(resources.target, borderBrush, fillBrush, activeBrush,
                    resources.textFormat);
 }

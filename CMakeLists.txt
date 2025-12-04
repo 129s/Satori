@@ -10,16 +10,18 @@ if (NOT EXISTS "${SATORI_FONTS_DIR}")
     message(FATAL_ERROR "Missing assets/Fonts directory: ${SATORI_FONTS_DIR}")
 endif()
 
-add_library(SatoriCore STATIC
+if (WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
+add_library(SatoriCoreLib STATIC
     src/audio/WaveWriter.cpp
     src/dsp/Filter.cpp
     src/synthesis/KarplusStrongString.cpp
     src/synthesis/KarplusStrongSynth.cpp
 )
 
-target_include_directories(SatoriCore PUBLIC src)
-
-option(SATORI_ENABLE_SERUM_SKIN "Enable Serum-style UI skin prototype for Win32 UI" OFF)
+target_include_directories(SatoriCoreLib PUBLIC src)
 
 if (WIN32)
     set(NUNITO_FONT_FILE "${SATORI_FONTS_DIR}/Nunito-Regular.ttf")
@@ -38,17 +40,17 @@ if (WIN32)
         @ONLY)
     set(NUNITO_FONT_RC "${SATORI_GENERATED_RESOURCES_DIR}/NunitoFont.rc")
 
-    add_library(SatoriWinAudio STATIC
+    add_library(SatoriRealtimeWin STATIC
         src/win/audio/RealtimeSynthRenderer.cpp
         src/win/audio/SatoriRealtimeEngine.cpp
         src/win/audio/WASAPIAudioEngine.cpp
     )
-    target_include_directories(SatoriWinAudio PUBLIC src)
-    target_link_libraries(SatoriWinAudio
-        PUBLIC SatoriCore
+    target_include_directories(SatoriRealtimeWin PUBLIC src)
+    target_link_libraries(SatoriRealtimeWin
+        PUBLIC SatoriCoreLib
         PRIVATE ole32.lib mmdevapi.lib avrt.lib)
 
-    add_executable(SatoriWin WIN32
+    add_executable(SatoriWinApp WIN32
         src/win/app/SatoriWinMain.cpp
         src/win/app/PresetManager.cpp
         src/win/ui/ParameterSlider.cpp
@@ -69,19 +71,16 @@ if (WIN32)
         src/win/ui/WaveformView.cpp
         src/win/ui/UISkin.cpp
     )
-    target_sources(SatoriWin PRIVATE "${NUNITO_FONT_RC}")
-    if (SATORI_ENABLE_SERUM_SKIN)
-        target_compile_definitions(SatoriWin PRIVATE SATORI_ENABLE_SERUM_SKIN=1)
-    endif()
-    target_link_libraries(SatoriWin PRIVATE SatoriWinAudio d2d1.lib dwrite.lib)
+    target_sources(SatoriWinApp PRIVATE "${NUNITO_FONT_RC}")
+    target_link_libraries(SatoriWinApp PRIVATE SatoriRealtimeWin d2d1.lib dwrite.lib)
 
-    add_executable(SatoriKnobTest WIN32
+    add_executable(SatoriKnobSandbox WIN32
         src/win/app/KnobTestMain.cpp
         src/win/ui/ParameterKnob.cpp
     )
-    target_sources(SatoriKnobTest PRIVATE "${NUNITO_FONT_RC}")
-    target_include_directories(SatoriKnobTest PRIVATE src)
-    target_link_libraries(SatoriKnobTest PRIVATE d2d1.lib dwrite.lib)
+    target_sources(SatoriKnobSandbox PRIVATE "${NUNITO_FONT_RC}")
+    target_include_directories(SatoriKnobSandbox PRIVATE src)
+    target_link_libraries(SatoriKnobSandbox PRIVATE d2d1.lib dwrite.lib)
 endif()
 
 add_library(Catch2Amalgamated STATIC
@@ -97,17 +96,17 @@ if (WIN32)
     list(APPEND TEST_SOURCES tests/win_audio_tests.cpp)
 endif()
 
-add_executable(SatoriTests ${TEST_SOURCES})
-target_link_libraries(SatoriTests PRIVATE Catch2Amalgamated SatoriCore)
+add_executable(SatoriUnitTests ${TEST_SOURCES})
+target_link_libraries(SatoriUnitTests PRIVATE Catch2Amalgamated SatoriCoreLib)
 if (WIN32)
-    target_link_libraries(SatoriTests PRIVATE SatoriWinAudio)
+    target_link_libraries(SatoriUnitTests PRIVATE SatoriRealtimeWin)
 endif()
 
 enable_testing()
-add_test(NAME SatoriTests COMMAND SatoriTests)
+add_test(NAME SatoriUnitTests COMMAND SatoriUnitTests)
 
-add_executable(Satori
+add_executable(SatoriCLI
     src/main.cpp
 )
 
-target_link_libraries(Satori PRIVATE SatoriCore)
+target_link_libraries(SatoriCLI PRIVATE SatoriCoreLib)
