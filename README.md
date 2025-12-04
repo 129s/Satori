@@ -68,7 +68,9 @@ cmake --build build --config Release
 
   若未指定 `--notes`，则使用 `--freq` 渲染单音；输出路径默认为 `satori_demo.wav`。
 
-- **Windows UI**：构建后运行 `build\Release\SatoriWinApp.exe`。首次启动会加载内置预设，当前阶段仅提供默认参数体验，暂未开放用户自定义保存。`SatoriKnobSandbox.exe` 只渲染测试面板，便于独立调校控件。
+- **Windows UI**：构建后运行 `build\Release\SatoriWinApp.exe`。首次启动会加载内置预设，当前阶段仅提供默认参数体验，暂未开放用户自定义保存。`SatoriKnobSandbox.exe` 只渲染测试面板，便于独立调校控件。  
+  - `F12`：启用 UI 调试模式，只在 Debug 构建可用，并会以纯黄色高亮当前鼠标命中的布局或控件，便于排查排版/命中区域问题。
+  - `F11`：导出布局尺寸到调试输出。
 
 ## 预设与资产
 
@@ -84,8 +86,3 @@ ctest --test-dir build --output-on-failure
 
 - `tests/core_tests.cpp` 针对 Karplus-Strong DSP。
 - `tests/win_audio_tests.cpp` 仅在 `_WIN32` 下编译，需实际 WASAPI 设备；若在无声卡或 CI 环境执行，可直接运行 `SatoriUnitTests.exe "~[wasapi]" "~[realtime-engine]"` 来跳过依赖硬件的用例。
-
-## 打包
-
-- 当前阶段对外仅提供开箱即用的 `SatoriWinApp.exe`，其中已内置所需字体与默认预设数据（`presets/` 中的内容将编译进资源，用户自定义预设功能暂不随发行包供用）。
-- 生成 Release 配置后直接分发 `build\Release\SatoriWinApp.exe` 即可；如需要附带示例 WAV、说明等，可手动放在单独的压缩包中，但无需额外脚本。
