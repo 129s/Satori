@@ -12,6 +12,7 @@ enum class ParamId {
     EnableLowpass,
     NoiseType,
     MasterGain,
+    AmpRelease,
 };
 
 enum class ParamType { Float, Bool, Enum };
@@ -31,4 +32,3 @@ const ParamInfo* FindParamByName(std::string_view name);
 float ClampToRange(const ParamInfo& info, float value);
 
 }  // namespace engine
-

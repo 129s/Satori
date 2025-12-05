@@ -25,6 +25,7 @@ const std::vector<ParamInfo>& GetParamInfoList() {
         {ParamId::EnableLowpass, "enableLowpass", ParamType::Bool, 0.0f, 1.0f, 1.0f},
         {ParamId::NoiseType, "noiseType", ParamType::Enum, 0.0f, 1.0f, 0.0f},
         {ParamId::MasterGain, "masterGain", ParamType::Float, 0.0f, 2.0f, 1.0f},
+        {ParamId::AmpRelease, "ampRelease", ParamType::Float, 0.01f, 5.0f, 0.35f},
     };
     return kParams;
 }
@@ -57,4 +58,3 @@ float ClampToRange(const ParamInfo& info, float value) {
 }
 
 }  // namespace engine
-

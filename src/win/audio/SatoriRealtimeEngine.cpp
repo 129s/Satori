@@ -45,6 +45,14 @@ void SatoriRealtimeEngine::triggerNote(double frequency, double durationSeconds)
     synthEngine_.noteOn(frequency, durationSeconds);
 }
 
+void SatoriRealtimeEngine::noteOn(int midiNote, double frequency, float velocity) {
+    synthEngine_.noteOn(midiNote, frequency, velocity);
+}
+
+void SatoriRealtimeEngine::noteOff(int midiNote) {
+    synthEngine_.noteOff(midiNote);
+}
+
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
     synthesis::StringConfig clamped = config;
     clamped.sampleRate = static_cast<double>(audioConfig_.sampleRate);

@@ -75,8 +75,10 @@ TEST_CASE("StringSynthEngine 处理 NoteOn 并耗尽 voice", "[engine]") {
     synthesis::StringConfig config;
     config.sampleRate = 48000.0;
     engine::StringSynthEngine synth(config);
+    synth.setParam(engine::ParamId::AmpRelease, 0.02f);
 
-    synth.noteOn(440.0, 0.05);
+    const int midi = 60;
+    synth.noteOn(midi, 440.0, 1.0f);
 
     const uint16_t channels = 2;
     const std::size_t frames = 128;
@@ -90,8 +92,16 @@ TEST_CASE("StringSynthEngine 处理 NoteOn 并耗尽 voice", "[engine]") {
         const bool hasSignal = std::any_of(
             buffer.begin(), buffer.end(), [](float sample) { return sample != 0.0f; });
         produced = produced || hasSignal;
-        if (produced &&
-            std::all_of(buffer.begin(), buffer.end(),
+        if (i == 4) {
+            synth.noteOff(midi);
+        }
+    }
+
+    for (int i = 0; i < 80; ++i) {
+        std::vector<float> buffer(frames * channels);
+        engine::ProcessBlock block{buffer.data(), frames, channels};
+        synth.process(block);
+        if (std::all_of(buffer.begin(), buffer.end(),
                         [](float sample) { return sample == 0.0f; })) {
             drained = true;
             break;

@@ -118,6 +118,7 @@ set(TEST_SOURCES
     tests/main.cpp
     tests/core_tests.cpp
     tests/string_params_tests.cpp
+    tests/voice_manager_tests.cpp
 )
 if (WIN32)
     list(APPEND TEST_SOURCES tests/win_audio_tests.cpp)

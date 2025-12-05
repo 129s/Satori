@@ -23,6 +23,8 @@ public:
 
     void triggerNote(double frequency,
                      double durationSeconds = kDefaultNoteDurationSeconds);
+    void noteOn(int midiNote, double frequency, float velocity = 1.0f);
+    void noteOff(int midiNote);
     void setSynthConfig(const synthesis::StringConfig& config);
     void setParam(engine::ParamId id, float value);
     float getParam(engine::ParamId id) const;

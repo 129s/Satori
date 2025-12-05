@@ -2,11 +2,16 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 
 namespace engine {
 
 StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
-    : config_(config) {}
+    : config_(config) {
+    if (const auto* info = GetParamInfo(ParamId::AmpRelease)) {
+        ampReleaseSeconds_ = info->defaultValue;
+    }
+}
 
 void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -42,6 +47,28 @@ void StringSynthEngine::enqueueEvent(const Event& event) {
     eventQueue_.push_back(event);
 }
 
+void StringSynthEngine::noteOn(int noteId, double frequency, float velocity) {
+    Event event;
+    event.type = EventType::NoteOn;
+    event.noteId = noteId;
+    event.velocity = velocity;
+    event.frequency = frequency;
+    event.durationSeconds = 6.0;
+    enqueueEvent(event);
+}
+
+void StringSynthEngine::noteOff(int noteId) {
+    if (noteId < 0) {
+        return;
+    }
+    Event event;
+    event.type = EventType::NoteOff;
+    event.noteId = noteId;
+    event.frequency = 0.0;
+    event.durationSeconds = 0.0;
+    enqueueEvent(event);
+}
+
 void StringSynthEngine::noteOn(double frequency, double durationSeconds) {
     Event event;
     event.type = EventType::NoteOn;
@@ -70,6 +97,8 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f;
         case ParamId::MasterGain:
             return masterGain_;
+        case ParamId::AmpRelease:
+            return static_cast<float>(ampReleaseSeconds_);
         default:
             return 0.0f;
     }
@@ -86,16 +115,24 @@ void StringSynthEngine::process(const ProcessBlock& block) {
     std::vector<Voice> localVoices;
     synthesis::StringConfig currentConfig{};
     float currentMasterGain = 1.0f;
+    double currentAmpRelease = 0.0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         currentConfig = config_;
         currentMasterGain = masterGain_;
+        currentAmpRelease = ampReleaseSeconds_;
         events.swap(eventQueue_);
         localVoices.swap(voices_);
     }
 
     for (const auto& event : events) {
-        handleEvent(event, currentConfig, localVoices, currentMasterGain);
+        if (event.type == EventType::NoteOff) {
+            handleNoteOff(event.noteId, localVoices, currentAmpRelease,
+                          currentConfig.sampleRate);
+            continue;
+        }
+        handleEvent(event, currentConfig, localVoices, currentMasterGain,
+                    currentAmpRelease);
     }
 
     mixVoices(block, localVoices, currentMasterGain);
@@ -115,10 +152,12 @@ void StringSynthEngine::process(const ProcessBlock& block) {
 void StringSynthEngine::handleEvent(const Event& event,
                                     synthesis::StringConfig& config,
                                     std::vector<Voice>& voices,
-                                    float& masterGain) {
+                                    float& masterGain,
+                                    double ampRelease) {
     switch (event.type) {
         case EventType::NoteOn:
-            handleNoteOn(event.frequency, event.durationSeconds, config, voices);
+            handleNoteOn(event.frequency, event.durationSeconds, config, event.noteId,
+                         event.velocity, voices, ampRelease);
             break;
         case EventType::ParamChange:
             applyParamUnlocked(event.param, event.paramValue, config, masterGain);
@@ -129,18 +168,54 @@ void StringSynthEngine::handleEvent(const Event& event,
 }
 
 void StringSynthEngine::handleNoteOn(double frequency, double durationSeconds,
-                                     const synthesis::StringConfig& config,
-                                     std::vector<Voice>& voices) {
+                                     const synthesis::StringConfig& config, int noteId,
+                                     float velocity, std::vector<Voice>& voices,
+                                     double ampRelease) {
     if (frequency <= 0.0 || durationSeconds <= 0.0 ||
         config.sampleRate <= 0.0) {
         return;
     }
+    if (voices.size() >= kMaxVoices) {
+        auto it = std::max_element(
+            voices.begin(), voices.end(),
+            [](const Voice& a, const Voice& b) { return a.cursor < b.cursor; });
+        if (it != voices.end()) {
+            voices.erase(it);
+        }
+    }
     synthesis::KarplusStrongString string(config);
-    auto samples = string.pluck(frequency, durationSeconds);
+    const double sustainSeconds = std::max(durationSeconds, 6.0);
+    auto samples = string.pluck(frequency, sustainSeconds);
     if (samples.empty()) {
         return;
     }
-    voices.push_back(Voice{std::move(samples), 0});
+    Voice v;
+    v.buffer = std::move(samples);
+    v.cursor = 0;
+    v.releaseStart = std::numeric_limits<std::size_t>::max();
+    v.releaseSamples =
+        static_cast<std::size_t>(std::max(0.0, ampRelease * config.sampleRate));
+    v.noteId = noteId;
+    v.velocity = velocity;
+    v.state = Voice::State::Active;
+    voices.push_back(std::move(v));
+}
+
+void StringSynthEngine::handleNoteOff(int noteId, std::vector<Voice>& voices,
+                                      double ampRelease, double sampleRateValue) {
+    if (noteId < 0) {
+        return;
+    }
+    for (auto& voice : voices) {
+        if (voice.noteId != noteId || voice.state == Voice::State::Releasing) {
+            continue;
+        }
+        voice.state = Voice::State::Releasing;
+        voice.releaseStart = voice.cursor;
+        voice.releaseSamples =
+            static_cast<std::size_t>(std::max(0.0, ampRelease * sampleRateValue));
+        break;
+    }
 }
 
 void StringSynthEngine::mixVoices(const ProcessBlock& block,
@@ -150,7 +225,8 @@ void StringSynthEngine::mixVoices(const ProcessBlock& block,
         const auto bufferSize = voice.buffer.size();
         for (std::size_t frame = 0; frame < block.frames && voice.cursor < bufferSize;
              ++frame) {
-            const float sample = voice.buffer[voice.cursor++] * masterGain;
+            const float envelope = ComputeReleaseEnvelope(voice);
+            const float sample = voice.buffer[voice.cursor++] * masterGain * envelope;
             for (uint16_t ch = 0; ch < block.channels; ++ch) {
                 block.output[frame * block.channels + ch] += sample;
             }
@@ -159,7 +235,14 @@ void StringSynthEngine::mixVoices(const ProcessBlock& block,
 
     voices.erase(
         std::remove_if(voices.begin(), voices.end(),
-                       [](const Voice& voice) { return voice.cursor >= voice.buffer.size(); }),
+                       [](const Voice& voice) {
+                           const bool finishedBuffer = voice.cursor >= voice.buffer.size();
+                           const bool finishedRelease =
+                               voice.state == Voice::State::Releasing &&
+                               voice.releaseSamples > 0 &&
+                               voice.cursor >= voice.releaseStart + voice.releaseSamples;
+                           return finishedBuffer || finishedRelease;
+                       }),
         voices.end());
 }
 
@@ -191,9 +274,28 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
         case ParamId::MasterGain:
             masterGain = clamped;
             break;
+        case ParamId::AmpRelease:
+            ampReleaseSeconds_ = clamped;
+            break;
         default:
             break;
     }
+}
+
+float StringSynthEngine::ComputeReleaseEnvelope(const Voice& voice) {
+    if (voice.state != Voice::State::Releasing || voice.releaseSamples == 0 ||
+        voice.releaseStart == std::numeric_limits<std::size_t>::max()) {
+        return voice.velocity;
+    }
+    const std::size_t elapsed = voice.cursor > voice.releaseStart
+                                    ? (voice.cursor - voice.releaseStart)
+                                    : 0;
+    if (elapsed >= voice.releaseSamples) {
+        return 0.0f;
+    }
+    const float factor =
+        1.0f - static_cast<float>(elapsed) / static_cast<float>(voice.releaseSamples);
+    return voice.velocity * factor;
 }
 
 }  // namespace engine

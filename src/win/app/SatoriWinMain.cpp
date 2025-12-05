@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <windowsx.h>
 
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <sstream>
@@ -35,6 +36,10 @@ std::filesystem::path GetExecutableDir() {
     GetModuleFileNameW(nullptr, buffer, MAX_PATH);
     std::filesystem::path exePath(buffer);
     return exePath.remove_filename();
+}
+
+double MidiToFrequency(int midi) {
+    return 440.0 * std::pow(2.0, (static_cast<double>(midi) - 69.0) / 12.0);
 }
 
 class SatoriAppState {
@@ -77,6 +82,7 @@ private:
     std::unique_ptr<winapp::PresetManager> presetManager_;
     synthesis::StringConfig synthConfig_{};
     float masterGain_ = 1.0f;
+    float ampRelease_ = 0.35f;
     bool audioReady_ = false;
     std::wstring audioStatus_ = L"音频：未初始化";
     std::wstring presetStatus_ = L"预设：默认";
@@ -104,6 +110,7 @@ bool SatoriAppState::initialize(HWND hwnd) {
 
     synthConfig_ = engine_->synthConfig();
     masterGain_ = engine_->masterGain();
+    ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);
     initializeKeyBindings();
     initializePresetSupport();
     refreshWaveformPreview();
@@ -203,8 +210,10 @@ void SatoriAppState::syncSynthConfig() {
     if (engine_) {
         engine_->setSynthConfig(synthConfig_);
         engine_->setMasterGain(masterGain_);
+        engine_->setParam(engine::ParamId::AmpRelease, ampRelease_);
         synthConfig_ = engine_->synthConfig();
         masterGain_ = engine_->masterGain();
+        ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);
     }
 }
 
@@ -254,7 +263,7 @@ void SatoriAppState::initializePresetSupport() {
     const auto defaultPreset = presetManager_->defaultPresetPath();
     if (std::filesystem::exists(defaultPreset)) {
         std::wstring error;
-        if (presetManager_->load(defaultPreset, synthConfig_, masterGain_, error)) {
+        if (presetManager_->load(defaultPreset, synthConfig_, masterGain_, ampRelease_, error)) {
             syncSynthConfig();
             if (d2d_) {
                 d2d_->syncSliders();
@@ -283,12 +292,14 @@ void SatoriAppState::handleLoadPreset() {
     }
     std::wstring error;
     float loadedGain = masterGain_;
-    if (!presetManager_->load(path, synthConfig_, loadedGain, error)) {
+    float loadedRelease = ampRelease_;
+    if (!presetManager_->load(path, synthConfig_, loadedGain, loadedRelease, error)) {
         MessageBoxW(window_, error.c_str(), kWindowTitle,
                     MB_ICONWARNING | MB_OK);
         return;
     }
     masterGain_ = loadedGain;
+    ampRelease_ = loadedRelease;
     syncSynthConfig();
     if (d2d_) {
         d2d_->syncSliders();
@@ -303,7 +314,7 @@ void SatoriAppState::handleSavePreset() {
     }
     std::wstring error;
     const auto path = presetManager_->userPresetPath();
-    if (!presetManager_->save(path, synthConfig_, masterGain_, error)) {
+    if (!presetManager_->save(path, synthConfig_, masterGain_, ampRelease_, error)) {
         MessageBoxW(window_, error.c_str(), kWindowTitle,
                     MB_ICONWARNING | MB_OK);
         return;
@@ -328,6 +339,9 @@ bool SatoriAppState::handleMidiKeyDown(UINT vk, LPARAM lparam) {
         if (window_) {
             InvalidateRect(window_, nullptr, FALSE);
         }
+        if (engine_ && audioReady_) {
+            engine_->noteOn(midi, MidiToFrequency(midi));
+        }
         return true;
     }
     return false;
@@ -341,6 +355,9 @@ bool SatoriAppState::handleMidiKeyUp(UINT vk) {
     if (d2d_) {
         d2d_->releaseKeyboardKey(it->second);
     }
+    if (engine_ && audioReady_) {
+        engine_->noteOff(it->second);
+    }
     activeVirtualKeys_.erase(it);
     if (window_) {
         InvalidateRect(window_, nullptr, FALSE);
@@ -349,6 +366,11 @@ bool SatoriAppState::handleMidiKeyUp(UINT vk) {
 }
 
 void SatoriAppState::releaseAllVirtualKeys() {
+    if (engine_ && audioReady_) {
+        for (const auto& kv : activeVirtualKeys_) {
+            engine_->noteOff(kv.second);
+        }
+    }
     if (d2d_) {
         d2d_->releaseAllKeyboardKeys();
     }

@@ -88,6 +88,7 @@ std::filesystem::path PresetManager::userPresetPath() const {
 bool PresetManager::load(const std::filesystem::path& path,
                          synthesis::StringConfig& config,
                          float& masterGain,
+                         float& ampRelease,
                          std::wstring& errorMessage) const {
     std::ifstream stream(path);
     if (!stream.is_open()) {
@@ -96,12 +97,13 @@ bool PresetManager::load(const std::filesystem::path& path,
     }
     std::stringstream buffer;
     buffer << stream.rdbuf();
-    return parse(buffer.str(), config, masterGain, errorMessage);
+    return parse(buffer.str(), config, masterGain, ampRelease, errorMessage);
 }
 
 bool PresetManager::save(const std::filesystem::path& path,
                          const synthesis::StringConfig& config,
                          float masterGain,
+                         float ampRelease,
                          std::wstring& errorMessage) const {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -110,7 +112,7 @@ bool PresetManager::save(const std::filesystem::path& path,
         errorMessage = L"无法写入预设文件: " + path.wstring();
         return false;
     }
-    stream << serialize(config, masterGain);
+    stream << serialize(config, masterGain, ampRelease);
     if (!stream.good()) {
         errorMessage = L"写入预设内容失败: " + path.wstring();
         return false;
@@ -121,9 +123,11 @@ bool PresetManager::save(const std::filesystem::path& path,
 bool PresetManager::parse(const std::string& content,
                           synthesis::StringConfig& config,
                           float& masterGain,
+                          float& ampRelease,
                           std::wstring& errorMessage) const {
     engine::StringSynthEngine params(config);
     params.setParam(engine::ParamId::MasterGain, masterGain);
+    params.setParam(engine::ParamId::AmpRelease, ampRelease);
 
     bool ok = false;
     if (auto decay = ExtractValue(content, "decay")) {
@@ -174,14 +178,24 @@ bool PresetManager::parse(const std::string& content,
         }
         params.setParam(engine::ParamId::MasterGain, value);
     }
+    if (auto release = ExtractValue(content, "ampRelease")) {
+        const float value = ParseFloat(*release, ok);
+        if (!ok) {
+            errorMessage = L"解析 ampRelease 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::AmpRelease, value);
+    }
 
     config = params.stringConfig();
     masterGain = params.getParam(engine::ParamId::MasterGain);
+    ampRelease = params.getParam(engine::ParamId::AmpRelease);
     return true;
 }
 
 std::string PresetManager::serialize(const synthesis::StringConfig& config,
-                                     float masterGain) {
+                                     float masterGain,
+                                     float ampRelease) {
     std::ostringstream oss;
     oss << "{\n"
         << "  \"decay\": " << config.decay << ",\n"
@@ -190,7 +204,8 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")
         << "\",\n"
-        << "  \"masterGain\": " << masterGain << "\n"
+        << "  \"masterGain\": " << masterGain << ",\n"
+        << "  \"ampRelease\": " << ampRelease << "\n"
         << "}\n";
     return oss.str();
 }
