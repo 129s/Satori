@@ -1,10 +1,9 @@
 #pragma once
 
-#include <mutex>
 #include <string>
 
+#include "engine/StringSynthEngine.h"
 #include "synthesis/KarplusStrongString.h"
-#include "win/audio/RealtimeSynthRenderer.h"
 #include "win/audio/WASAPIAudioEngine.h"
 
 namespace winaudio {
@@ -35,7 +34,7 @@ private:
     synthesis::StringConfig synthConfig_;
 
     WASAPIAudioEngine audioEngine_;
-    RealtimeSynthRenderer renderer_;
+    engine::StringSynthEngine synthEngine_;
 };
 
 }  // namespace winaudio

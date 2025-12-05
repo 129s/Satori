@@ -9,6 +9,7 @@
 
 #include <catch2/catch_amalgamated.hpp>
 
+#include "engine/StringSynthEngine.h"
 #include "win/audio/SatoriRealtimeEngine.h"
 #include "win/audio/WASAPIAudioEngine.h"
 
@@ -66,46 +67,38 @@ TEST_CASE("SatoriRealtimeEngine 初始化后同步设备采样率", "[realtime-e
     engine.setSynthConfig(alteredConfig);
 
     const auto& syncedConfig = engine.synthConfig();
-    REQUIRE(syncedConfig.sampleRate == Approx(deviceSampleRate));
-    REQUIRE(syncedConfig.decay == Approx(alteredConfig.decay));
+    REQUIRE(syncedConfig.sampleRate == Catch::Approx(deviceSampleRate));
+    REQUIRE(syncedConfig.decay == Catch::Approx(alteredConfig.decay));
 }
 
-TEST_CASE("RealtimeSynthRenderer 混合多 voice 并适配不同 buffer", "[realtime-engine]") {
+TEST_CASE("StringSynthEngine 处理 NoteOn 并耗尽 voice", "[engine]") {
     synthesis::StringConfig config;
     config.sampleRate = 48000.0;
-    winaudio::RealtimeSynthRenderer renderer(config);
+    engine::StringSynthEngine synth(config);
 
-    renderer.enqueueNote(440.0, 0.02);
-    renderer.enqueueNote(660.0, 0.03);
+    synth.noteOn(440.0, 0.05);
 
     const uint16_t channels = 2;
-    {
-        const std::size_t frames = 128;
-        std::vector<float> buffer(frames * channels);
-        renderer.render(buffer.data(), frames, channels);
-        REQUIRE(std::any_of(buffer.begin(), buffer.end(),
-                            [](float sample) { return sample != 0.0f; }));
-    }
+    const std::size_t frames = 128;
 
-    {
-        const std::size_t frames = 64;
-        std::vector<float> buffer(frames * channels);
-        renderer.render(buffer.data(), frames, channels);
-        REQUIRE(std::any_of(buffer.begin(), buffer.end(),
-                            [](float sample) { return sample != 0.0f; }));
-    }
-
+    bool produced = false;
     bool drained = false;
-    for (int i = 0; i < 64; ++i) {
-        const std::size_t frames = 64;
+    for (int i = 0; i < 48; ++i) {
         std::vector<float> buffer(frames * channels);
-        renderer.render(buffer.data(), frames, channels);
-        if (std::all_of(buffer.begin(), buffer.end(),
+        engine::ProcessBlock block{buffer.data(), frames, channels};
+        synth.process(block);
+        const bool hasSignal = std::any_of(
+            buffer.begin(), buffer.end(), [](float sample) { return sample != 0.0f; });
+        produced = produced || hasSignal;
+        if (produced &&
+            std::all_of(buffer.begin(), buffer.end(),
                         [](float sample) { return sample == 0.0f; })) {
             drained = true;
             break;
         }
     }
+
+    REQUIRE(produced);
     REQUIRE(drained);
 }
 

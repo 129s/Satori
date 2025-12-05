@@ -17,6 +17,7 @@ endif()
 add_library(SatoriCoreLib STATIC
     src/audio/WaveWriter.cpp
     src/dsp/Filter.cpp
+    src/engine/StringSynthEngine.cpp
     src/synthesis/KarplusStrongString.cpp
     src/synthesis/KarplusStrongSynth.cpp
 )
@@ -41,7 +42,6 @@ if (WIN32)
     set(NUNITO_FONT_RC "${SATORI_GENERATED_RESOURCES_DIR}/NunitoFont.rc")
 
     add_library(SatoriRealtimeWin STATIC
-        src/win/audio/RealtimeSynthRenderer.cpp
         src/win/audio/SatoriRealtimeEngine.cpp
         src/win/audio/WASAPIAudioEngine.cpp
     )

@@ -8,7 +8,7 @@ SatoriRealtimeEngine::SatoriRealtimeEngine()
     : audioConfig_({44100, 1, 512}),
       synthConfig_(),
       audioEngine_(audioConfig_),
-      renderer_(synthConfig_) {}
+      synthEngine_(synthConfig_) {}
 
 SatoriRealtimeEngine::~SatoriRealtimeEngine() {
     shutdown();
@@ -21,7 +21,7 @@ bool SatoriRealtimeEngine::initialize() {
     if (ok) {
         audioConfig_ = audioEngine_.config();
         synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
-        renderer_.setConfig(synthConfig_);
+        synthEngine_.setConfig(synthConfig_);
     }
     return ok;
 }
@@ -40,17 +40,21 @@ void SatoriRealtimeEngine::stop() {
 }
 
 void SatoriRealtimeEngine::triggerNote(double frequency, double durationSeconds) {
-    renderer_.enqueueNote(frequency, durationSeconds);
+    synthEngine_.noteOn(frequency, durationSeconds);
 }
 
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
     synthConfig_ = config;
     synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
-    renderer_.setConfig(synthConfig_);
+    synthEngine_.setConfig(synthConfig_);
 }
 
 void SatoriRealtimeEngine::handleRender(float* output, std::size_t frames) {
-    renderer_.render(output, frames, audioConfig_.channels);
+    engine::ProcessBlock block;
+    block.output = output;
+    block.frames = frames;
+    block.channels = audioConfig_.channels;
+    synthEngine_.process(block);
 }
 
 }  // namespace winaudio
