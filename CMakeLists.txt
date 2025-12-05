@@ -77,6 +77,20 @@ if (WIN32)
     target_compile_definitions(SatoriWinApp PRIVATE
         $<$<CONFIG:Debug>:SATORI_ENABLE_UI_DEBUG=1>)
 
+    add_executable(SatoriKeyboardSandbox WIN32
+        src/win/app/KeyboardSandboxMain.cpp
+        src/win/ui/VirtualKeyboard.cpp
+        src/win/ui/DebugOverlay.cpp
+    )
+    target_sources(SatoriKeyboardSandbox PRIVATE "${NUNITO_FONT_RC}")
+    target_include_directories(SatoriKeyboardSandbox PRIVATE src)
+    target_link_libraries(SatoriKeyboardSandbox PRIVATE d2d1.lib dwrite.lib)
+    target_compile_definitions(SatoriKeyboardSandbox PRIVATE SATORI_ENABLE_UI_DEBUG=1)
+    if (MSVC)
+        set_target_properties(SatoriKeyboardSandbox PROPERTIES
+            EXCLUDE_FROM_DEFAULT_BUILD_RELEASE TRUE)
+    endif()
+
     add_executable(SatoriKnobSandbox WIN32
         src/win/app/KnobTestMain.cpp
         src/win/ui/ParameterKnob.cpp

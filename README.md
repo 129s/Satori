@@ -71,6 +71,7 @@ cmake --build build --config Release
 - **Windows UI**：构建后运行 `build\Release\SatoriWinApp.exe`。首次启动会加载内置预设，当前阶段仅提供默认参数体验，暂未开放用户自定义保存。`SatoriKnobSandbox.exe` 只渲染测试面板，便于独立调校控件。  
   - `F12`：启用 UI 调试模式，只在 Debug 构建可用，并会以纯黄色高亮当前鼠标命中的布局或控件，便于排查排版/命中区域问题。
   - `F11`：导出布局尺寸到调试输出。
+- **Keyboard Sandbox**：`build\Release\SatoriKeyboardSandbox.exe` 渲染标准钢琴键盘（默认 3 个八度，可在 `src/win/app/KeyboardSandboxMain.cpp` 中调整常量），颜色为黑白基调，带 hover/按压高亮。支持鼠标点击/拖扫和常见 PC 键盘映射：`A S D F G H J` 对应白键，`W E T Y U` 对应黑键，回调会把音名与频率写入 `OutputDebugString`；`F12` 可切换盒模型调试视图。
 
 ## 预设与资产
 
