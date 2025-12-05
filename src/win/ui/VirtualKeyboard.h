@@ -30,7 +30,6 @@ public:
 
     void setBounds(const D2D1_RECT_F& bounds);
     void setCallback(Callback callback);
-    void setKeys(const std::vector<std::pair<std::wstring, double>>& keys);
     void setPianoLayout(int baseMidiNote, int octaveCount);
     void setShowLabels(bool enabled);
     void setHoverOutline(bool enabled);
@@ -71,11 +70,7 @@ private:
         int rightWhiteSlot = -1;
     };
 
-    enum class LayoutMode { kLinear, kPiano };
-
-    void buildLinearKeys(const std::vector<std::pair<std::wstring, double>>& keys);
     void buildPianoKeys(int baseMidiNote, int octaveCount);
-    void layoutLinear();
     void layoutPiano();
     Key* hitTest(float x, float y);
     void triggerKey(Key* key);
@@ -89,7 +84,6 @@ private:
     Key* activeKey_ = nullptr;
     Key* hoveredKey_ = nullptr;
     bool dragging_ = false;
-    LayoutMode layoutMode_ = LayoutMode::kLinear;
     int baseMidiNote_ = 60;
     int octaveCount_ = 0;
     int totalWhiteKeys_ = 0;

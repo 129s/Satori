@@ -6,15 +6,13 @@ namespace winui {
 
 KeyboardNode::KeyboardNode() = default;
 
-void KeyboardNode::setKeys(const std::vector<VirtualKeyDescriptor>& keys,
-                           std::function<void(double)> callback) {
-    std::vector<std::pair<std::wstring, double>> vk;
-    vk.reserve(keys.size());
-    for (const auto& key : keys) {
-        vk.emplace_back(key.label, key.frequency);
-    }
-    keyboard_.setKeys(vk);
+void KeyboardNode::setConfig(const KeyboardConfig& config,
+                             std::function<void(double)> callback) {
     keyboard_.setCallback(std::move(callback));
+    keyboard_.setShowLabels(config.showLabels);
+    keyboard_.setHoverOutline(config.hoverOutline);
+    keyboard_.setPianoLayout(config.baseMidiNote, config.octaveCount);
+    preferredHeight_ = 140.0f;
 }
 
 float KeyboardNode::preferredHeight(float) const {
@@ -28,21 +26,41 @@ void KeyboardNode::arrange(const D2D1_RECT_F& bounds) {
 }
 
 void KeyboardNode::draw(const RenderResources& resources) {
-    if (!resources.target || !resources.accentBrush || !resources.fillBrush ||
-        !resources.panelBrush || !resources.textFormat) {
+    if (!resources.target || !resources.textFormat) {
         return;
     }
 
-    // 默认主题下沿用原有配色：
-    // - 边框：accentBrush
-    // - 普通键：panelBrush
-    // - 按下键：fillBrush
-    ID2D1SolidColorBrush* borderBrush = resources.accentBrush;
-    ID2D1SolidColorBrush* fillBrush = resources.panelBrush;
-    ID2D1SolidColorBrush* activeBrush = resources.fillBrush;
+    KeyboardColors colors = colors_;
+    // 若未提供专用配色，退回默认刷子组合。
+    if (!colors.whiteFill) {
+        colors.whiteFill = resources.panelBrush;
+    }
+    if (!colors.whiteBorder) {
+        colors.whiteBorder = resources.accentBrush;
+    }
+    if (!colors.whitePressed) {
+        colors.whitePressed = resources.fillBrush;
+    }
+    if (!colors.whiteText) {
+        colors.whiteText = resources.textBrush ? resources.textBrush : resources.accentBrush;
+    }
+    if (!colors.blackFill) {
+        colors.blackFill = resources.trackBrush ? resources.trackBrush : resources.panelBrush;
+    }
+    if (!colors.blackBorder) {
+        colors.blackBorder = colors.whiteBorder;
+    }
+    if (!colors.blackPressed) {
+        colors.blackPressed = colors.whitePressed;
+    }
+    if (!colors.blackText) {
+        colors.blackText = colors.whiteText;
+    }
+    if (!colors.hoverOutline) {
+        colors.hoverOutline = colors.whiteBorder;
+    }
 
-    keyboard_.draw(resources.target, borderBrush, fillBrush, activeBrush,
-                   resources.textFormat);
+    keyboard_.draw(resources.target, colors, resources.textFormat);
 }
 
 bool KeyboardNode::onPointerDown(float x, float y) {
@@ -55,6 +73,22 @@ bool KeyboardNode::onPointerMove(float x, float y) {
 
 void KeyboardNode::onPointerUp() {
     keyboard_.onPointerUp();
+}
+
+void KeyboardNode::setColors(const KeyboardColors& colors) {
+    colors_ = colors;
+}
+
+bool KeyboardNode::pressKeyByMidi(int midiNote) {
+    return keyboard_.pressKeyByMidi(midiNote);
+}
+
+void KeyboardNode::releaseKeyByMidi(int midiNote) {
+    keyboard_.releaseKeyByMidi(midiNote);
+}
+
+void KeyboardNode::releaseAllKeys() {
+    keyboard_.releaseAllKeys();
 }
 
 }  // namespace winui

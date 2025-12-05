@@ -24,9 +24,11 @@ struct StatusInfo {
     std::wstring secondary;
 };
 
-struct VirtualKeyDescriptor {
-    std::wstring label;
-    double frequency = 0.0;
+struct KeyboardConfig {
+    int baseMidiNote = 48;
+    int octaveCount = 3;
+    bool showLabels = false;
+    bool hoverOutline = false;
 };
 
 struct FlowDiagramState {
@@ -41,7 +43,7 @@ struct UIModel {
     StatusInfo status;
     std::vector<ButtonDescriptor> buttons;
     std::vector<SliderDescriptor> sliders;
-    std::vector<VirtualKeyDescriptor> keys;
+    KeyboardConfig keyboardConfig;
     std::function<void(double)> keyCallback;
     std::vector<float> waveformSamples;
     bool audioOnline = false;

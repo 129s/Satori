@@ -6,7 +6,7 @@ Satori 是一个基于 Karplus-Strong 算法的数字弦乐合成器实验项目
 
 - **跨形态合成**：`SatoriCoreLib` 静态库封装音频写入、基本 DSP、Karplus-Strong String/Synth，可同时驱动命令行和实时前端。
 - **命令行离线渲染**：`SatoriCLI` 可通过参数快速输出单音或和弦 WAV（支持噪声类型、滤波、随机种子等调参），适合批量生成示例素材。
-- **Windows 实时体验**：`SatoriWinApp` 基于 WASAPI + Direct2D/DirectWrite，包含参数旋钮/推子、虚拟键盘、波形视图和预设管理，视觉语言借鉴 Serum 但目前提供统一主题。
+- **Windows 实时体验**：`SatoriWinApp` 基于 WASAPI + Direct2D/DirectWrite，包含参数旋钮/推子、波形视图和预设管理，并集成了来自 Keyboard Sandbox 的钢琴式虚拟键盘（PC 键盘映射同沙盒）；视觉语言借鉴 Serum 但目前提供统一主题。
 - **可测试性**：使用 Catch2（预置在 `third_party/catch2`）实现核心 DSP 与 Win 音频回调测试（`SatoriUnitTests`），支持 `ctest` 集成。
 
 ## 架构
@@ -68,7 +68,7 @@ cmake --build build --config Release
 
   若未指定 `--notes`，则使用 `--freq` 渲染单音；输出路径默认为 `satori_demo.wav`。
 
-- **Windows UI**：构建后运行 `build\Release\SatoriWinApp.exe`。首次启动会加载内置预设，当前阶段仅提供默认参数体验，暂未开放用户自定义保存。`SatoriKnobSandbox.exe` 只渲染测试面板，便于独立调校控件。  
+- **Windows UI**：构建后运行 `build\Release\SatoriWinApp.exe`。首次启动会加载内置预设，当前阶段仅提供默认参数体验，暂未开放用户自定义保存；内置虚拟键盘与 `SatoriKeyboardSandbox.exe` 使用相同的钢琴布局与 PC 键盘映射。`SatoriKnobSandbox.exe` 只渲染测试面板，便于独立调校控件。  
   - `F12`：启用 UI 调试模式，只在 Debug 构建可用，并会以纯黄色高亮当前鼠标命中的布局或控件，便于排查排版/命中区域问题。
   - `F11`：导出布局尺寸到调试输出。
 - **Keyboard Sandbox**：`build\Release\SatoriKeyboardSandbox.exe` 渲染标准钢琴键盘（默认 3 个八度，可在 `src/win/app/KeyboardSandboxMain.cpp` 中调整常量），颜色为黑白基调，带 hover/按压高亮。支持鼠标点击/拖扫和常见 PC 键盘映射：`A S D F G H J` 对应白键，`W E T Y U` 对应黑键，回调会把音名与频率写入 `OutputDebugString`；`F12` 可切换盒模型调试视图。

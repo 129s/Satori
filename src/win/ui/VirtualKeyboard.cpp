@@ -56,11 +56,6 @@ void VirtualKeyboard::setCallback(Callback callback) {
     callback_ = std::move(callback);
 }
 
-void VirtualKeyboard::setKeys(const std::vector<std::pair<std::wstring, double>>& keys) {
-    buildLinearKeys(keys);
-    layoutKeys();
-}
-
 void VirtualKeyboard::setPianoLayout(int baseMidiNote, int octaveCount) {
     buildPianoKeys(baseMidiNote, octaveCount);
     layoutKeys();
@@ -132,12 +127,8 @@ void VirtualKeyboard::draw(ID2D1HwndRenderTarget* target,
         }
     };
 
-    if (layoutMode_ == LayoutMode::kPiano) {
-        renderKeyList(whiteKeyOrder_);
-        renderKeyList(blackKeyOrder_);
-    } else {
-        renderKeyList(whiteKeyOrder_);
-    }
+    renderKeyList(whiteKeyOrder_);
+    renderKeyList(blackKeyOrder_);
 }
 
 bool VirtualKeyboard::onPointerDown(float x, float y) {
@@ -236,31 +227,7 @@ bool VirtualKeyboard::focusedKeyBounds(D2D1_RECT_F& outBounds) const {
     return false;
 }
 
-void VirtualKeyboard::buildLinearKeys(
-    const std::vector<std::pair<std::wstring, double>>& keys) {
-    layoutMode_ = LayoutMode::kLinear;
-    keys_.clear();
-    whiteKeyOrder_.clear();
-    blackKeyOrder_.clear();
-    midiToKeyIndex_.clear();
-    activeKey_ = nullptr;
-    hoveredKey_ = nullptr;
-    dragging_ = false;
-    totalWhiteKeys_ = static_cast<int>(keys.size());
-    for (const auto& [label, freq] : keys) {
-        Key key;
-        key.label = label;
-        key.frequency = freq;
-        key.isBlack = false;
-        key.midiNote = -1;
-        key.whiteSlot = static_cast<int>(whiteKeyOrder_.size());
-        keys_.push_back(std::move(key));
-        whiteKeyOrder_.push_back(keys_.size() - 1);
-    }
-}
-
 void VirtualKeyboard::buildPianoKeys(int baseMidiNote, int octaveCount) {
-    layoutMode_ = LayoutMode::kPiano;
     keys_.clear();
     whiteKeyOrder_.clear();
     blackKeyOrder_.clear();
@@ -309,33 +276,7 @@ void VirtualKeyboard::layoutKeys() {
     if (keys_.empty()) {
         return;
     }
-    if (layoutMode_ == LayoutMode::kPiano) {
-        layoutPiano();
-    } else {
-        layoutLinear();
-    }
-}
-
-void VirtualKeyboard::layoutLinear() {
-    if (whiteKeyOrder_.empty()) {
-        return;
-    }
-    const float width = bounds_.right - bounds_.left;
-    if (width <= 0.0f) {
-        return;
-    }
-    const float keyWidth = width / static_cast<float>(whiteKeyOrder_.size());
-    float x = bounds_.left;
-    for (std::size_t idx : whiteKeyOrder_) {
-        if (idx >= keys_.size()) {
-            continue;
-        }
-        auto& key = keys_[idx];
-        key.bounds = InsetRect(
-            D2D1::RectF(x, bounds_.top, x + keyWidth, bounds_.bottom),
-            kPaddingInset);
-        x += keyWidth;
-    }
+    layoutPiano();
 }
 
 void VirtualKeyboard::layoutPiano() {
@@ -403,23 +344,14 @@ VirtualKeyboard::Key* VirtualKeyboard::hitTest(float x, float y) {
         return x >= key.bounds.left && x <= key.bounds.right &&
                y >= key.bounds.top && y <= key.bounds.bottom;
     };
-    if (layoutMode_ == LayoutMode::kPiano) {
-        for (std::size_t idx : blackKeyOrder_) {
-            if (idx < keys_.size() && contains(keys_[idx])) {
-                return &keys_[idx];
-            }
+    for (std::size_t idx : blackKeyOrder_) {
+        if (idx < keys_.size() && contains(keys_[idx])) {
+            return &keys_[idx];
         }
-        for (std::size_t idx : whiteKeyOrder_) {
-            if (idx < keys_.size() && contains(keys_[idx])) {
-                return &keys_[idx];
-            }
-        }
-        return nullptr;
     }
-
-    for (auto& key : keys_) {
-        if (contains(key)) {
-            return &key;
+    for (std::size_t idx : whiteKeyOrder_) {
+        if (idx < keys_.size() && contains(keys_[idx])) {
+            return &keys_[idx];
         }
     }
     return nullptr;

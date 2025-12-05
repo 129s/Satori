@@ -5,6 +5,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "synthesis/KarplusStrongString.h"
@@ -21,6 +22,8 @@ const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
 // 推荐窗口客户端区域尺寸（也是本迭代的最小可用尺寸）
 constexpr int kMinClientWidth = 1280;
 constexpr int kMinClientHeight = 720;
+constexpr int kKeyboardBaseMidiNote = 48;  // C3
+constexpr int kKeyboardOctaveCount = 3;
 
 std::unique_ptr<winaudio::SatoriRealtimeEngine> g_engine;
 std::unique_ptr<winui::Direct2DContext> g_d2d;
@@ -34,33 +37,8 @@ std::vector<float> g_waveformSamples;
 #if SATORI_UI_DEBUG_ENABLED
 bool g_trackingMouseLeave = false;
 #endif
-
-const std::vector<std::pair<std::wstring, double>> kVirtualKeys = {
-    {L"C4", 261.63}, {L"D4", 293.66}, {L"E4", 329.63}, {L"F4", 349.23},
-    {L"G4", 392.00}, {L"A4", 440.00}, {L"B4", 493.88}, {L"C5", 523.25}};
-
-double KeyToFrequency(WPARAM key) {
-    switch (key) {
-        case 'A':
-            return 261.63;  // C4
-        case 'S':
-            return 293.66;  // D4
-        case 'D':
-            return 329.63;  // E4
-        case 'F':
-            return 349.23;  // F4
-        case 'G':
-            return 392.00;  // G4
-        case 'H':
-            return 440.00;  // A4
-        case 'J':
-            return 493.88;  // B4
-        case 'K':
-            return 523.25;  // C5
-        default:
-            return 0.0;
-    }
-}
+std::unordered_map<UINT, int> g_virtualKeyToMidi;
+std::unordered_map<UINT, int> g_activeVirtualKeys;
 
 std::wstring ToWide(const std::string& text) {
     return std::wstring(text.begin(), text.end());
@@ -124,6 +102,16 @@ std::vector<float> GenerateWaveform(double frequency) {
 void HandleLoadPreset();
 void HandleSavePreset();
 
+void RefreshWaveformPreview(double frequency = 440.0) {
+    g_waveformSamples = GenerateWaveform(frequency);
+    if (g_d2d) {
+        g_d2d->updateWaveformSamples(g_waveformSamples);
+    }
+    if (g_mainWindow) {
+        InvalidateRect(g_mainWindow, nullptr, FALSE);
+    }
+}
+
 void TriggerFrequency(double frequency) {
     if (frequency <= 0.0) {
         return;
@@ -131,14 +119,13 @@ void TriggerFrequency(double frequency) {
     if (g_engine && g_audioReady) {
         g_engine->triggerNote(frequency, 2.0);
     }
-    if (g_d2d) {
-        g_waveformSamples = GenerateWaveform(frequency);
-        g_d2d->updateWaveformSamples(g_waveformSamples);
-    }
-    if (g_mainWindow) {
-        InvalidateRect(g_mainWindow, nullptr, FALSE);
-    }
+    RefreshWaveformPreview(frequency);
 }
+
+void InitializeKeyBindings();
+bool HandleMidiKeyDown(UINT vk, LPARAM lparam);
+bool HandleMidiKeyUp(UINT vk);
+void ReleaseAllVirtualKeys();
 
 winui::UIModel BuildUIModel() {
     winui::UIModel model;
@@ -162,6 +149,7 @@ winui::UIModel BuildUIModel() {
         desc.setter = [&field](float value) {
             field = value;
             SyncSynthConfig();
+            RefreshWaveformPreview();
         };
         model.sliders.push_back(std::move(desc));
     };
@@ -169,9 +157,10 @@ winui::UIModel BuildUIModel() {
     addSlider(L"Brightness", 0.0f, 1.0f, g_synthConfig.brightness);
     addSlider(L"Pick Position", 0.05f, 0.95f, g_synthConfig.pickPosition);
 
-    for (const auto& key : kVirtualKeys) {
-        model.keys.push_back({key.first, key.second});
-    }
+    model.keyboardConfig.baseMidiNote = kKeyboardBaseMidiNote;
+    model.keyboardConfig.octaveCount = kKeyboardOctaveCount;
+    model.keyboardConfig.showLabels = false;
+    model.keyboardConfig.hoverOutline = false;
     model.keyCallback = [](double freq) { TriggerFrequency(freq); };
 
     return model;
@@ -195,6 +184,7 @@ void InitializePresetSupport(HWND hwnd) {
             if (g_d2d) {
                 g_d2d->syncSliders();
             }
+            RefreshWaveformPreview();
             UpdatePresetStatus(L"预设：" + defaultPreset.filename().wstring());
         } else if (hwnd) {
             MessageBoxW(hwnd, error.c_str(), kWindowTitle, MB_ICONWARNING | MB_OK);
@@ -225,6 +215,7 @@ void HandleLoadPreset() {
     if (g_d2d) {
         g_d2d->syncSliders();
     }
+    RefreshWaveformPreview();
     UpdatePresetStatus(L"预设：" + path.filename().wstring());
 }
 
@@ -240,6 +231,76 @@ void HandleSavePreset() {
         return;
     }
     UpdatePresetStatus(L"预设：已保存到 " + path.filename().wstring());
+}
+
+void InitializeKeyBindings() {
+    g_virtualKeyToMidi.clear();
+    struct KeyBinding {
+        UINT vk = 0;
+        int semitoneOffset = 0;
+    };
+    static const KeyBinding kWhiteBindings[] = {
+        {'A', 0}, {'S', 2}, {'D', 4}, {'F', 5},
+        {'G', 7}, {'H', 9}, {'J', 11},
+    };
+    static const KeyBinding kBlackBindings[] = {
+        {'W', 1}, {'E', 3}, {'T', 6}, {'Y', 8}, {'U', 10},
+    };
+    for (const auto& binding : kWhiteBindings) {
+        g_virtualKeyToMidi[binding.vk] =
+            kKeyboardBaseMidiNote + binding.semitoneOffset;
+    }
+    for (const auto& binding : kBlackBindings) {
+        g_virtualKeyToMidi[binding.vk] =
+            kKeyboardBaseMidiNote + binding.semitoneOffset;
+    }
+}
+
+bool HandleMidiKeyDown(UINT vk, LPARAM lparam) {
+    if ((lparam & (1 << 30)) != 0) {  // autorepeat
+        return g_virtualKeyToMidi.find(vk) != g_virtualKeyToMidi.end();
+    }
+    auto it = g_virtualKeyToMidi.find(vk);
+    if (it == g_virtualKeyToMidi.end()) {
+        return false;
+    }
+    if (g_activeVirtualKeys.count(vk)) {
+        return true;
+    }
+    const int midi = it->second;
+    if (g_d2d && g_d2d->pressKeyboardKey(midi)) {
+        g_activeVirtualKeys.emplace(vk, midi);
+        if (g_mainWindow) {
+            InvalidateRect(g_mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool HandleMidiKeyUp(UINT vk) {
+    auto it = g_activeVirtualKeys.find(vk);
+    if (it == g_activeVirtualKeys.end()) {
+        return false;
+    }
+    if (g_d2d) {
+        g_d2d->releaseKeyboardKey(it->second);
+    }
+    g_activeVirtualKeys.erase(it);
+    if (g_mainWindow) {
+        InvalidateRect(g_mainWindow, nullptr, FALSE);
+    }
+    return true;
+}
+
+void ReleaseAllVirtualKeys() {
+    if (g_d2d) {
+        g_d2d->releaseAllKeyboardKeys();
+    }
+    g_activeVirtualKeys.clear();
+    if (g_mainWindow) {
+        InvalidateRect(g_mainWindow, nullptr, FALSE);
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -259,7 +320,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
 
             g_synthConfig = g_engine->synthConfig();
+            InitializeKeyBindings();
             InitializePresetSupport(hwnd);
+            RefreshWaveformPreview();
             RefreshUI();
             UpdateAudioStatus(hwnd, !g_audioReady);
             return 0;
@@ -307,11 +370,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
 
-            const double freq = KeyToFrequency(wparam);
-            if (freq > 0.0) {
-                TriggerFrequency(freq);
+            if (HandleMidiKeyDown(static_cast<UINT>(wparam), lparam)) {
+                return 0;
             }
-            return 0;
+            break;
+        }
+        case WM_KEYUP: {
+            if (HandleMidiKeyUp(static_cast<UINT>(wparam))) {
+                return 0;
+            }
+            break;
         }
         case WM_LBUTTONDOWN: {
             if (g_d2d && g_d2d->onPointerDown(static_cast<float>(GET_X_LPARAM(lparam)),
@@ -361,12 +429,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 #endif
             return 0;
         }
+        case WM_KILLFOCUS:
+        case WM_CANCELMODE:
+        case WM_ACTIVATE: {
+            if (msg != WM_ACTIVATE || LOWORD(wparam) == WA_INACTIVE) {
+                ReleaseAllVirtualKeys();
+                if (g_d2d) {
+                    g_d2d->onPointerUp();
+                }
+            }
+            break;
+        }
         case WM_DESTROY:
             if (g_engine) {
                 g_engine->stop();
                 g_engine->shutdown();
                 g_engine.reset();
             }
+            ReleaseAllVirtualKeys();
             g_d2d.reset();
             g_presetManager.reset();
             g_mainWindow = nullptr;

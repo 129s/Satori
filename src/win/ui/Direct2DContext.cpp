@@ -12,8 +12,8 @@
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
 #include "win/ui/nodes/FlowDiagramNode.h"
-#include "win/ui/nodes/KeyboardNode.h"
 #include "win/ui/nodes/KnobPanelNode.h"
+#include "win/ui/nodes/KeyboardNode.h"
 #include "win/ui/nodes/TopBarNode.h"
 #include "win/ui/layout/UIStackPanel.h"
 
@@ -271,6 +271,30 @@ bool Direct2DContext::onPointerLeave() {
 #endif
 }
 
+bool Direct2DContext::pressKeyboardKey(int midiNote) {
+    if (!keyboardNode_) {
+        return false;
+    }
+    const bool handled = keyboardNode_->pressKeyByMidi(midiNote);
+    if (handled) {
+        layoutDirty_ = true;
+    }
+    return handled;
+}
+
+void Direct2DContext::releaseKeyboardKey(int midiNote) {
+    if (!keyboardNode_) {
+        return;
+    }
+    keyboardNode_->releaseKeyByMidi(midiNote);
+}
+
+void Direct2DContext::releaseAllKeyboardKeys() {
+    if (keyboardNode_) {
+        keyboardNode_->releaseAllKeys();
+    }
+}
+
 void Direct2DContext::setDebugOverlayMode(DebugOverlayMode mode) {
 #if SATORI_UI_DEBUG_ENABLED
     if (debugOverlayMode_ == mode) {
@@ -375,6 +399,61 @@ bool Direct2DContext::createDeviceResources() {
     if (FAILED(hr)) {
         return false;
     }
+    // 虚拟键盘配色复用 KeyboardSandbox 方案。
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.94f, 0.95f, 0.98f, 1.0f), &keyboardWhiteFillBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.78f, 0.82f, 0.90f, 1.0f), &keyboardWhitePressedBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.10f, 0.12f, 0.16f, 1.0f), &keyboardWhiteTextBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.08f, 0.08f, 0.10f, 1.0f), &keyboardBlackFillBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.20f, 0.25f, 0.35f, 1.0f), &keyboardBlackPressedBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.98f, 0.98f, 0.99f, 1.0f), &keyboardBlackTextBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.15f, 0.17f, 0.22f, 1.0f), &keyboardBorderBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.85f, 0.46f, 0.18f, 1.0f), &keyboardHoverBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    keyboardColors_.whiteFill = keyboardWhiteFillBrush_.Get();
+    keyboardColors_.whitePressed = keyboardWhitePressedBrush_.Get();
+    keyboardColors_.whiteBorder = keyboardBorderBrush_.Get();
+    keyboardColors_.whiteText = keyboardWhiteTextBrush_.Get();
+    keyboardColors_.blackFill = keyboardBlackFillBrush_.Get();
+    keyboardColors_.blackPressed = keyboardBlackPressedBrush_.Get();
+    keyboardColors_.blackBorder = keyboardBorderBrush_.Get();
+    keyboardColors_.blackText = keyboardBlackTextBrush_.Get();
+    keyboardColors_.hoverOutline = keyboardHoverBrush_.Get();
+    if (keyboardNode_) {
+        keyboardNode_->setColors(keyboardColors_);
+    }
+
     debugOverlayPalette_ = MakeUnifiedDebugOverlayPalette();
     debugBoxRenderer_.setPalette(debugOverlayPalette_);
     return true;
@@ -387,6 +466,15 @@ void Direct2DContext::discardDeviceResources() {
     fillBrush_.Reset();
     panelBrush_.Reset();
     gridBrush_.Reset();
+    keyboardWhiteFillBrush_.Reset();
+    keyboardWhitePressedBrush_.Reset();
+    keyboardWhiteTextBrush_.Reset();
+    keyboardBlackFillBrush_.Reset();
+    keyboardBlackPressedBrush_.Reset();
+    keyboardBlackTextBrush_.Reset();
+    keyboardBorderBrush_.Reset();
+    keyboardHoverBrush_.Reset();
+    keyboardColors_ = {};
     renderTarget_.Reset();
     debugBoxRenderer_.setPalette(debugOverlayPalette_);
 }
@@ -442,7 +530,8 @@ void Direct2DContext::rebuildLayout() {
 #endif
 
     keyboardNode_ = std::make_shared<KeyboardNode>();
-    keyboardNode_->setKeys(model_.keys, model_.keyCallback);
+    keyboardNode_->setColors(keyboardColors_);
+    keyboardNode_->setConfig(model_.keyboardConfig, model_.keyCallback);
 
     auto mainStack = std::make_shared<UIStackPanel>(8.0f);
     mainStack->setItems({
@@ -454,7 +543,7 @@ void Direct2DContext::rebuildLayout() {
     rootStack->setItems({
         {topBar, {UISizeMode::kFixed, 40.0f, 32.0f}},
         {mainStack, {UISizeMode::kAuto, 0.0f, 400.0f}},
-        {keyboardNode_, {UISizeMode::kFixed, 120.0f, 110.0f}},
+        {keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}},
     });
 
     rootLayout_ = rootStack;
@@ -562,11 +651,13 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
         return std::nullopt;
     };
 
+    if (keyboardNode_) {
+        if (auto keyboardSelection = checkNode(keyboardNode_)) {
+            return keyboardSelection;
+        }
+    }
     if (auto flowSelection = checkNode(flowNode_)) {
         return flowSelection;
-    }
-    if (auto keyboardSelection = checkNode(keyboardNode_)) {
-        return keyboardSelection;
     }
     if (auto topSelection = checkNode(topBarNode_)) {
         return topSelection;

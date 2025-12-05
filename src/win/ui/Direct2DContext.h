@@ -19,6 +19,7 @@
 #include "win/ui/UIModel.h"
 #include "win/ui/layout/UILayoutNode.h"
 #include "win/ui/UISkin.h"
+#include "win/ui/VirtualKeyboard.h"
 
 namespace winui {
 
@@ -48,6 +49,9 @@ public:
     void onPointerUp();
     bool onPointerLeave();
     bool hasPointerCapture() const { return pointerCaptured_; }
+    bool pressKeyboardKey(int midiNote);
+    void releaseKeyboardKey(int midiNote);
+    void releaseAllKeyboardKeys();
 
     void setDebugOverlayMode(DebugOverlayMode mode);
     void toggleDebugOverlay();
@@ -76,6 +80,14 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fillBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> panelBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> gridBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardWhiteFillBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardWhitePressedBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardWhiteTextBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardBlackFillBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardBlackPressedBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardBlackTextBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardBorderBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardHoverBrush_;
     Microsoft::WRL::ComPtr<IDWriteFactory> dwriteFactory_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> textFormat_;
     Microsoft::WRL::ComPtr<IDWriteFontCollection1> nunitoFontCollection_;
@@ -102,6 +114,7 @@ private:
     std::shared_ptr<FlowDiagramNode> flowNode_;
     std::shared_ptr<KnobPanelNode> knobPanelNode_;
     std::shared_ptr<KeyboardNode> keyboardNode_;
+    KeyboardColors keyboardColors_{};
 };
 
 }  // namespace winui
