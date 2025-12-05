@@ -9,6 +9,8 @@
 
 namespace winaudio {
 
+inline constexpr double kDefaultNoteDurationSeconds = 2.0;
+
 class SatoriRealtimeEngine {
 public:
     SatoriRealtimeEngine();
@@ -20,7 +22,8 @@ public:
     bool start();
     void stop();
 
-    void triggerNote(double frequency, double durationSeconds);
+    void triggerNote(double frequency,
+                     double durationSeconds = kDefaultNoteDurationSeconds);
     void setSynthConfig(const synthesis::StringConfig& config);
     const synthesis::StringConfig& synthConfig() const { return synthConfig_; }
     const std::string& lastError() const { return audioEngine_.lastError(); }

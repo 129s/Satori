@@ -20,6 +20,8 @@ bool SatoriRealtimeEngine::initialize() {
         [this](float* buffer, std::size_t frames) { handleRender(buffer, frames); });
     if (ok) {
         audioConfig_ = audioEngine_.config();
+        synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+        renderer_.setConfig(synthConfig_);
     }
     return ok;
 }
@@ -43,6 +45,7 @@ void SatoriRealtimeEngine::triggerNote(double frequency, double durationSeconds)
 
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
     synthConfig_ = config;
+    synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
     renderer_.setConfig(synthConfig_);
 }
 

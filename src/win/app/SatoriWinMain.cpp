@@ -229,7 +229,7 @@ void SatoriAppState::triggerFrequency(double frequency) {
         return;
     }
     if (engine_ && audioReady_) {
-        engine_->triggerNote(frequency, 2.0);
+        engine_->triggerNote(frequency, winaudio::kDefaultNoteDurationSeconds);
     }
     refreshWaveformPreview(frequency);
 }

@@ -1,6 +1,7 @@
 #include "win/audio/RealtimeSynthRenderer.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace winaudio {
 
@@ -26,23 +27,34 @@ void RealtimeSynthRenderer::render(float* output, std::size_t frames, uint16_t c
     const std::size_t totalSamples = frames * channels;
     std::fill(output, output + totalSamples, 0.0f);
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& voice : voices_) {
-        for (std::size_t frame = 0; frame < frames; ++frame) {
-            if (voice.cursor >= voice.buffer.size()) {
-                break;
-            }
+    std::vector<ActiveVoice> localVoices;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        localVoices.swap(voices_);
+    }
+
+    std::vector<ActiveVoice> activeVoices;
+    activeVoices.reserve(localVoices.size());
+
+    for (auto& voice : localVoices) {
+        const auto bufferSize = voice.buffer.size();
+        for (std::size_t frame = 0; frame < frames && voice.cursor < bufferSize; ++frame) {
             const float sample = voice.buffer[voice.cursor++];
             for (uint16_t ch = 0; ch < channels; ++ch) {
                 output[frame * channels + ch] += sample;
             }
         }
+        if (voice.cursor < bufferSize) {
+            activeVoices.push_back(std::move(voice));
+        }
     }
 
-    voices_.erase(
-        std::remove_if(voices_.begin(), voices_.end(),
-                       [](const ActiveVoice& voice) { return voice.cursor >= voice.buffer.size(); }),
-        voices_.end());
+    if (!activeVoices.empty()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        voices_.insert(voices_.end(),
+                       std::make_move_iterator(activeVoices.begin()),
+                       std::make_move_iterator(activeVoices.end()));
+    }
 }
 
 }  // namespace winaudio
