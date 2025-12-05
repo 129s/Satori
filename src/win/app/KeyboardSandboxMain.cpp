@@ -7,7 +7,6 @@
 #include <dwrite_3.h>
 #include <wrl/client.h>
 
-#include <array>
 #include <cmath>
 #include <cwchar>
 #include <optional>
@@ -16,6 +15,7 @@
 
 #include "win/ui/D2DHelpers.h"
 #include "win/ui/DebugOverlay.h"
+#include "win/ui/KeyboardKeymap.h"
 #include "win/ui/NunitoFont.h"
 #include "win/ui/VirtualKeyboard.h"
 
@@ -61,11 +61,6 @@ float g_lastPointerY = 0.0f;
 std::unordered_map<UINT, int> g_virtualKeyToMidi;
 std::unordered_map<UINT, int> g_activeVirtualKeys;
 
-struct KeyBinding {
-    UINT vk = 0;
-    int semitoneOffset = 0;
-};
-
 winui::DebugBoxModel MakeDebugModel(const D2D1_RECT_F& bounds) {
     winui::DebugBoxModel model;
     model.segments.push_back({winui::DebugBoxLayer::kBorder, bounds});
@@ -102,22 +97,8 @@ bool DebugModelsEqual(const std::optional<winui::DebugBoxModel>& lhs,
 }
 
 void InitializeKeyBindings() {
-    g_virtualKeyToMidi.clear();
-    static const std::array<KeyBinding, 7> kWhiteBindings = {
-        KeyBinding{ 'A', 0 }, KeyBinding{ 'S', 2 }, KeyBinding{ 'D', 4 },
-        KeyBinding{ 'F', 5 }, KeyBinding{ 'G', 7 }, KeyBinding{ 'H', 9 },
-        KeyBinding{ 'J', 11 },
-    };
-    static const std::array<KeyBinding, 5> kBlackBindings = {
-        KeyBinding{'W', 1}, KeyBinding{'E', 3}, KeyBinding{'T', 6},
-        KeyBinding{'Y', 8}, KeyBinding{'U', 10},
-    };
-    for (const auto& binding : kWhiteBindings) {
-        g_virtualKeyToMidi[binding.vk] = kBaseMidiNote + binding.semitoneOffset;
-    }
-    for (const auto& binding : kBlackBindings) {
-        g_virtualKeyToMidi[binding.vk] = kBaseMidiNote + binding.semitoneOffset;
-    }
+    g_virtualKeyToMidi =
+        winui::MakeKeyboardKeymap(kBaseMidiNote, kDefaultOctaveCount);
 }
 
 void LogTriggeredFrequency(double frequency) {

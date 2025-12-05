@@ -57,6 +57,7 @@ if (WIN32)
         src/win/ui/ParameterKnob.cpp
         src/win/ui/DebugOverlay.cpp
         src/win/ui/Direct2DContext.cpp
+        src/win/ui/KeyboardKeymap.cpp
         src/win/ui/layout/UIStackPanel.cpp
         src/win/ui/layout/UIOverlay.cpp
         src/win/ui/nodes/ButtonBarNode.cpp
@@ -81,6 +82,7 @@ if (WIN32)
         src/win/app/KeyboardSandboxMain.cpp
         src/win/ui/VirtualKeyboard.cpp
         src/win/ui/DebugOverlay.cpp
+        src/win/ui/KeyboardKeymap.cpp
     )
     target_sources(SatoriKeyboardSandbox PRIVATE "${NUNITO_FONT_RC}")
     target_include_directories(SatoriKeyboardSandbox PRIVATE src)

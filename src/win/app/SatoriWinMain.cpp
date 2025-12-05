@@ -12,6 +12,7 @@
 #include "win/app/PresetManager.h"
 #include "win/audio/SatoriRealtimeEngine.h"
 #include "win/ui/Direct2DContext.h"
+#include "win/ui/KeyboardKeymap.h"
 #include "win/ui/UIModel.h"
 
 namespace {
@@ -234,26 +235,8 @@ void SatoriAppState::triggerFrequency(double frequency) {
 }
 
 void SatoriAppState::initializeKeyBindings() {
-    virtualKeyToMidi_.clear();
-    struct KeyBinding {
-        UINT vk = 0;
-        int semitoneOffset = 0;
-    };
-    static const KeyBinding kWhiteBindings[] = {
-        {'A', 0}, {'S', 2}, {'D', 4}, {'F', 5},
-        {'G', 7}, {'H', 9}, {'J', 11},
-    };
-    static const KeyBinding kBlackBindings[] = {
-        {'W', 1}, {'E', 3}, {'T', 6}, {'Y', 8}, {'U', 10},
-    };
-    for (const auto& binding : kWhiteBindings) {
-        virtualKeyToMidi_[binding.vk] =
-            kKeyboardBaseMidiNote + binding.semitoneOffset;
-    }
-    for (const auto& binding : kBlackBindings) {
-        virtualKeyToMidi_[binding.vk] =
-            kKeyboardBaseMidiNote + binding.semitoneOffset;
-    }
+    virtualKeyToMidi_ =
+        winui::MakeKeyboardKeymap(kKeyboardBaseMidiNote, kKeyboardOctaveCount);
 }
 
 void SatoriAppState::initializePresetSupport() {
