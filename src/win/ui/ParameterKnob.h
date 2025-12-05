@@ -28,6 +28,18 @@ public:
               ID2D1SolidColorBrush* accentBrush,
               ID2D1SolidColorBrush* textBrush,
               IDWriteTextFormat* textFormat) const;
+    void drawBody(ID2D1HwndRenderTarget* target,
+                  ID2D1SolidColorBrush* baseBrush,
+                  ID2D1SolidColorBrush* fillBrush,
+                  ID2D1SolidColorBrush* accentBrush,
+                  ID2D1SolidColorBrush* textBrush,
+                  IDWriteTextFormat* textFormat) const;
+    void drawTooltip(ID2D1HwndRenderTarget* target,
+                     ID2D1SolidColorBrush* baseBrush,
+                     ID2D1SolidColorBrush* fillBrush,
+                     ID2D1SolidColorBrush* accentBrush,
+                     ID2D1SolidColorBrush* textBrush,
+                     IDWriteTextFormat* textFormat) const;
 
     bool onPointerDown(float x, float y);
     bool onPointerMove(float x, float y);
@@ -44,6 +56,10 @@ private:
     void updateDebugRects(const D2D1_RECT_F& border,
                           const D2D1_RECT_F& padding,
                           const D2D1_RECT_F& content) const;
+    struct Layout;
+    bool computeLayout(IDWriteTextFormat* textFormat,
+                       Layout* outLayout,
+                       float* outLineHeight) const;
 
     std::wstring label_;
     float min_ = 0.0f;

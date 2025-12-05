@@ -58,6 +58,25 @@ bool IsRectValid(const D2D1_RECT_F& rect) {
 }
 }  // namespace
 
+struct ParameterKnob::Layout {
+    float contentLeft = 0.0f;
+    float contentRight = 0.0f;
+    float contentTop = 0.0f;
+    float contentBottom = 0.0f;
+    float contentWidth = 0.0f;
+    float contentHeight = 0.0f;
+    float outerRadius = 0.0f;
+    float radius = 0.0f;
+    float slotGap = 0.0f;
+    float slotThicknessBase = 0.0f;
+    float labelHeight = 0.0f;
+    float labelPadY = 0.0f;
+    float labelTextWidth = 0.0f;
+    D2D1_POINT_2F center{};
+    D2D1_RECT_F labelOuterRect{};
+    D2D1_RECT_F labelTextRect{};
+};
+
 using Microsoft::WRL::ComPtr;
 
 ParameterKnob::ParameterKnob(std::wstring label,
@@ -78,12 +97,149 @@ void ParameterKnob::setBounds(const D2D1_RECT_F& bounds) {
     debugRectsValid_ = false;
 }
 
+bool ParameterKnob::computeLayout(IDWriteTextFormat* textFormat,
+                                  Layout* outLayout,
+                                  float* outLineHeight) const {
+    if (!outLayout) {
+        return false;
+    }
+    *outLayout = Layout{};
+
+    const float width = bounds_.right - bounds_.left;
+    const float height = bounds_.bottom - bounds_.top;
+    if (width <= 0.0f || height <= 0.0f) {
+        return false;
+    }
+
+    const float outerPaddingX = 8.0f;
+    const float outerPaddingTop = 8.0f;
+    const float outerPaddingBottom = 18.0f;  // 保证底部有足够留白
+
+    outLayout->contentLeft = bounds_.left + outerPaddingX;
+    outLayout->contentRight = bounds_.right - outerPaddingX;
+    outLayout->contentTop = bounds_.top + outerPaddingTop;
+    outLayout->contentBottom = bounds_.bottom - outerPaddingBottom;
+    outLayout->contentWidth = outLayout->contentRight - outLayout->contentLeft;
+    outLayout->contentHeight =
+        outLayout->contentBottom - outLayout->contentTop;
+    if (outLayout->contentWidth <= 0.0f || outLayout->contentHeight <= 0.0f) {
+        return false;
+    }
+
+    const float topMargin = 8.0f;     // contentTop 到值槽外缘的距离
+    const float bottomGap = 6.0f;     // 值槽外缘到底部 label 之间的间隙
+    const float minLabelHeight = 18.0f;
+    const float maxLabelHeight = 200.0f;
+
+    const float halfContentWidth = outLayout->contentWidth * 0.5f;
+    const float sideMargin = 4.0f;  // 值槽外缘距离 contentRect 左右边的空间
+
+    float outerRadius = halfContentWidth - sideMargin;
+    if (outerRadius <= 0.0f) {
+        return false;
+    }
+
+    outLayout->radius = outerRadius * (5.0f / 8.0f);
+    outLayout->slotGap = outerRadius * (1.0f / 8.0f);
+    outLayout->slotThicknessBase = outerRadius * (2.0f / 8.0f);
+
+    outLayout->labelHeight =
+        std::clamp((2.0f * outLayout->radius) / 3.0f, minLabelHeight,
+                   maxLabelHeight);
+
+    const float availableForCircleAndLabel =
+        outLayout->contentHeight - topMargin - bottomGap;
+    if (availableForCircleAndLabel <= 0.0f) {
+        return false;
+    }
+
+    const float requiredHeightWithoutMargins =
+        2.0f * outerRadius + outLayout->labelHeight;
+    if (requiredHeightWithoutMargins > availableForCircleAndLabel) {
+        const float scale =
+            availableForCircleAndLabel / requiredHeightWithoutMargins;
+        if (scale <= 0.0f) {
+            return false;
+        }
+        outerRadius *= scale;
+        outLayout->radius *= scale;
+        outLayout->slotGap *= scale;
+        outLayout->slotThicknessBase *= scale;
+        outLayout->labelHeight *= scale;
+    }
+
+    outLayout->outerRadius = outerRadius;
+
+    const float centerX =
+        (outLayout->contentLeft + outLayout->contentRight) * 0.5f;
+    const float centerY = outLayout->contentTop + topMargin + outerRadius;
+    outLayout->center = D2D1::Point2F(centerX, centerY);
+
+    float lineHeight = textFormat ? textFormat->GetFontSize() : 18.0f;
+    float lhW = 0.0f;
+    float lhH = lineHeight;
+    if (MeasureText(textFormat, L"Hg", 2, 10000.0f, &lhW, &lhH)) {
+        if (lhH > 0.0f) {
+            lineHeight = lhH;
+        }
+    }
+    if (outLineHeight) {
+        *outLineHeight = lineHeight;
+    }
+
+    outLayout->labelPadY = std::clamp(lineHeight * 0.18f, 3.0f, 12.0f);
+    const float labelTop = outLayout->center.y + outerRadius + bottomGap;
+    outLayout->labelOuterRect = D2D1::RectF(
+        outLayout->contentLeft, labelTop, outLayout->contentRight,
+        labelTop + outLayout->labelHeight + outLayout->labelPadY * 2.0f);
+    const float availableLabelWidth =
+        outLayout->labelOuterRect.right - outLayout->labelOuterRect.left;
+    if (availableLabelWidth <= 0.0f) {
+        return false;
+    }
+
+    float measuredLabelW = 0.0f;
+    float measuredLabelH = lineHeight;
+    if (MeasureText(textFormat, label_.c_str(),
+                    static_cast<UINT32>(label_.size()), 10000.0f,
+                    &measuredLabelW, &measuredLabelH) &&
+        measuredLabelW > 0.0f) {
+        outLayout->labelTextWidth = measuredLabelW;
+    } else {
+        outLayout->labelTextWidth = availableLabelWidth;
+    }
+    const float labelWidth =
+        std::clamp(outLayout->labelTextWidth, 1.0f, availableLabelWidth);
+    const float desiredLabelLeft = outLayout->center.x - labelWidth * 0.5f;
+    const float minLabelLeft = outLayout->labelOuterRect.left;
+    const float maxLabelLeft = outLayout->labelOuterRect.right - labelWidth;
+    const float labelLeft =
+        std::clamp(desiredLabelLeft, minLabelLeft, maxLabelLeft);
+    outLayout->labelTextRect = D2D1::RectF(
+        labelLeft, outLayout->labelOuterRect.top + outLayout->labelPadY,
+        labelLeft + labelWidth,
+        outLayout->labelOuterRect.bottom - outLayout->labelPadY);
+
+    return true;
+}
+
 void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
                          ID2D1SolidColorBrush* baseBrush,
                          ID2D1SolidColorBrush* fillBrush,
                          ID2D1SolidColorBrush* accentBrush,
                          ID2D1SolidColorBrush* textBrush,
                          IDWriteTextFormat* textFormat) const {
+    drawBody(target, baseBrush, fillBrush, accentBrush, textBrush, textFormat);
+    drawTooltip(target, baseBrush, fillBrush, accentBrush, textBrush,
+                textFormat);
+}
+
+void ParameterKnob::drawBody(ID2D1HwndRenderTarget* target,
+                             ID2D1SolidColorBrush* baseBrush,
+                             ID2D1SolidColorBrush* fillBrush,
+                             ID2D1SolidColorBrush* accentBrush,
+                             ID2D1SolidColorBrush* textBrush,
+                             IDWriteTextFormat* textFormat) const {
     if (!target || !baseBrush || !fillBrush || !accentBrush || !textBrush ||
         !textFormat) {
         return;
@@ -93,102 +249,44 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
 
     constexpr float kPi = 3.1415926f;
 
-    const float width = bounds_.right - bounds_.left;
-    const float height = bounds_.bottom - bounds_.top;
-    if (width <= 0.0f || height <= 0.0f) {
+    Layout layout{};
+    if (!computeLayout(textFormat, &layout, nullptr)) {
         return;
     }
 
-    // 布局：bounds_ 内只容纳“真实体积”——圆盘 + label + padding；
-    // tooltip 允许溢出 bounds_。
-    const float outerPaddingX = 8.0f;
-    const float outerPaddingTop = 8.0f;
-    const float outerPaddingBottom = 18.0f;  // 保证底部有足够留白
-
-    const float contentLeft = bounds_.left + outerPaddingX;
-    const float contentRight = bounds_.right - outerPaddingX;
-    const float contentTop = bounds_.top + outerPaddingTop;
-    const float contentBottom = bounds_.bottom - outerPaddingBottom;
-    const auto contentRect =
-        D2D1::RectF(contentLeft, contentTop, contentRight, contentBottom);
-    const float contentWidth = contentRight - contentLeft;
-    const float contentHeight = contentBottom - contentTop;
-    if (contentWidth <= 0.0f || contentHeight <= 0.0f) {
-        return;
-    }
-
-    // 几何约束：
-    // - 在 contentRect 内，值槽外缘与一个隐含正方形相切；
-    // - 从圆心到外缘，按“值槽厚度 : 空隙 : 圆盘半径 ≈ 2 : 1 : 5”比例分配；
-    // - 圆盘高度与 label 高度大致 3 : 1，并在底部保留 18px 留白。
-
-    const float topMargin = 8.0f;     // contentTop 到值槽外缘的距离
-    const float bottomGap = 6.0f;     // 值槽外缘到底部 label 之间的间隙
-    const float minLabelHeight = 18.0f;
-    const float maxLabelHeight = 200.0f;
-
-    const float halfContentWidth = contentWidth * 0.5f;
-    const float sideMargin = 4.0f;  // 值槽外缘距离 contentRect 左右边的空间
-
-    // 先以宽度为基准，假设值槽外缘半径。
-    float outerRadius = halfContentWidth - sideMargin;
-    if (outerRadius <= 0.0f) {
-        return;
-    }
-
-    // 根据“半径:间隙:槽厚 ≈ 5:1:2”拆分。
-    float radius = outerRadius * (5.0f / 8.0f);
-    float slotGap = outerRadius * (1.0f / 8.0f);
-    float slotThicknessBase = outerRadius * (2.0f / 8.0f);
-
-    // 依据圆盘大小估算 label 高度，使圆盘:label 接近 2.5:1。
-    float labelHeight = (2.0f * radius) / 3.0f;
-    labelHeight =
-        std::clamp(labelHeight, minLabelHeight, maxLabelHeight);
-
-    // 如果高度不够容纳“上边距 + 值槽直径 + 间隙 + label”，则整体缩放。
-    const float availableForCircleAndLabel =
-        contentHeight - topMargin - bottomGap;
-    if (availableForCircleAndLabel <= 0.0f) {
-        return;
-    }
-
-    const float requiredHeightWithoutMargins =
-        2.0f * outerRadius + labelHeight;
-    if (requiredHeightWithoutMargins > availableForCircleAndLabel) {
-        const float scale =
-            availableForCircleAndLabel / requiredHeightWithoutMargins;
-        if (scale <= 0.0f) {
-            return;
+    auto factory = GetLocalDWriteFactory();
+    bool labelDrawn = false;
+    if (factory) {
+        ComPtr<IDWriteTextLayout> labelLayout;
+        if (SUCCEEDED(factory->CreateTextLayout(
+                label_.c_str(), static_cast<UINT32>(label_.size()),
+                textFormat,
+                layout.labelTextRect.right - layout.labelTextRect.left,
+                layout.labelTextRect.bottom - layout.labelTextRect.top,
+                &labelLayout)) &&
+            labelLayout) {
+            labelLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            labelLayout->SetParagraphAlignment(
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            labelLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            DWRITE_TRIMMING trimming{};
+            trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+            ComPtr<IDWriteInlineObject> ellipsis;
+            if (SUCCEEDED(
+                    factory->CreateEllipsisTrimmingSign(textFormat, &ellipsis))) {
+                labelLayout->SetTrimming(&trimming, ellipsis.Get());
+            }
+            target->DrawTextLayout(
+                D2D1::Point2F(layout.labelTextRect.left,
+                              layout.labelTextRect.top),
+                labelLayout.Get(), textBrush);
+            labelDrawn = true;
         }
-        outerRadius *= scale;
-        radius *= scale;
-        slotGap *= scale;
-        slotThicknessBase *= scale;
-        labelHeight *= scale;
     }
-
-    const float centerX = (contentLeft + contentRight) * 0.5f;
-    const float centerY = contentTop + topMargin + outerRadius;
-    const D2D1_POINT_2F center =
-        D2D1::Point2F(centerX, centerY);
-
-    // Label 紧贴值槽外缘下方（与外缘之间留出 bottomGap）。
-    const float labelTop = center.y + outerRadius + bottomGap;
-    // 为 label 文本预留上下内边距，改善视觉呼吸感
-    const float labelPadY = std::clamp((textFormat ? textFormat->GetFontSize() : 18.0f) * 0.18f, 3.0f, 12.0f);
-    const auto labelOuterRect = D2D1::RectF(
-        contentLeft,
-        labelTop,
-        contentRight,
-        labelTop + labelHeight + labelPadY * 2.0f);
-    const auto labelTextRect = D2D1::RectF(
-        labelOuterRect.left,
-        labelOuterRect.top + labelPadY,
-        labelOuterRect.right,
-        labelOuterRect.bottom - labelPadY);
-    target->DrawText(label_.c_str(), static_cast<UINT32>(label_.size()),
-                     textFormat, labelTextRect, textBrush);
+    if (!labelDrawn) {
+        target->DrawText(label_.c_str(), static_cast<UINT32>(label_.size()),
+                         textFormat, layout.labelTextRect, textBrush);
+    }
 
     // 旋钮圆盘
     ID2D1SolidColorBrush* fill = fillBrush;             // 圆盘
@@ -207,7 +305,7 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
         slotBrush = accentBrush;
     }
 
-    const D2D1_ELLIPSE ellipse{center, radius, radius};
+    const D2D1_ELLIPSE ellipse{layout.center, layout.radius, layout.radius};
     target->FillEllipse(ellipse, fill);
     target->DrawEllipse(ellipse, ringBrush, 1.5f);
 
@@ -219,23 +317,25 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
 
     const float startAngle = -kPi * 1.25f;    // -225°
     const float sweep = kPi * 1.5f;           // 270°
-    const float slotRadius =
-        radius + slotGap + slotThicknessBase * 0.5f;  // 值槽中心线半径
+    const float slotRadius = layout.radius + layout.slotGap +
+                             layout.slotThicknessBase *
+                                 0.5f;  // 值槽中心线半径
 
     // 外圈值槽：在 270° 扫角范围内画一条略大于旋钮的弧线。
     // 使用 PathGeometry + ArcSegment 绘制连续圆弧，避免由多段线条拼接导致的“折线感”。
     if (slotBrush && clampedNorm > 0.001f) {
-        const float slotThickness = slotThicknessBase;  // 粗细固定，不随状态变化
+        const float slotThickness =
+            layout.slotThicknessBase;  // 粗细固定，不随状态变化
 
         const float endAngle = startAngle + sweep * clampedNorm;
         const float arcAngle = std::fabs(endAngle - startAngle);
         if (arcAngle > 1e-3f) {
             const D2D1_POINT_2F startPoint = D2D1::Point2F(
-                center.x + std::cos(startAngle) * slotRadius,
-                center.y + std::sin(startAngle) * slotRadius);
+                layout.center.x + std::cos(startAngle) * slotRadius,
+                layout.center.y + std::sin(startAngle) * slotRadius);
             const D2D1_POINT_2F endPoint = D2D1::Point2F(
-                center.x + std::cos(endAngle) * slotRadius,
-                center.y + std::sin(endAngle) * slotRadius);
+                layout.center.x + std::cos(endAngle) * slotRadius,
+                layout.center.y + std::sin(endAngle) * slotRadius);
 
             ComPtr<ID2D1Factory> factory;
             target->GetFactory(&factory);
@@ -271,114 +371,146 @@ void ParameterKnob::draw(ID2D1HwndRenderTarget* target,
     }
 
     const float angle = startAngle + sweep * clampedNorm;
-    const float pointerLen = radius * 0.8f;
+    const float pointerLen = layout.radius * 0.8f;
     const float pointerWidth = dragging_ ? 3.0f : 2.0f;
     const D2D1_POINT_2F pointerEnd = D2D1::Point2F(
-        center.x + std::cos(angle) * pointerLen,
-        center.y + std::sin(angle) * pointerLen);
-    target->DrawLine(center, pointerEnd, pointerBrush, pointerWidth);
-
-    // 数值文本只在拖拽时以“底部 tooltip”形式显示在 label 下方。
-    if (dragging_) {
-        // 显示百分比（四舍五入到 1%）
-        float norm = 0.0f;
-        const float range = (max_ - min_);
-        if (range > 1e-6f) {
-            norm = (value_ - min_) / range;
-        }
-        norm = std::clamp(norm, 0.0f, 1.0f);
-        const int percent = static_cast<int>(std::lround(norm * 100.0f));
-        wchar_t valueBuffer[64];
-        std::swprintf(valueBuffer, std::size(valueBuffer), L"%d%%", percent);
-
-        // 单行度量
-        float lhW = 0.0f, lhH = textFormat ? textFormat->GetFontSize() : 18.0f;
-        (void)MeasureText(textFormat, L"Hg", 2, 10000.0f, &lhW, &lhH);
-
-        float labelW = 0.0f, labelH = lhH;
-        (void)MeasureText(textFormat, label_.c_str(), (UINT32)label_.size(), 10000.0f, &labelW, &labelH);
-
-                float valueW = 0.0f, valueH = lhH;
-        (void)MeasureText(textFormat, valueBuffer, (UINT32)wcslen(valueBuffer), 10000.0f, &valueW, &valueH);
-
-        // 右列使用“最大可能宽度”稳定布局（减少拖拽时宽度抖动）
-        float w100 = 0.0f, hTmp = lhH;
-        (void)MeasureText(textFormat, L"100%", 4, 10000.0f, &w100, &hTmp);
-        float w88 = 0.0f; hTmp = lhH;
-        (void)MeasureText(textFormat, L"88%", 3, 10000.0f, &w88, &hTmp);
-        float w0 = 0.0f; hTmp = lhH;
-        (void)MeasureText(textFormat, L"0%", 2, 10000.0f, &w0, &hTmp);
-        const float valueWMax = std::max(w100, std::max(w88, w0));
-
-        // 宽度与上限（不超过“旋钮外缘直径的 2 倍”）
-        const float knobWidth = outerRadius * 2.0f;
-        const float tooltipMaxWidth = knobWidth * 2.0f;
-        const float innerPadX = std::clamp(lhH * 0.22f, 4.0f, 10.0f);
-        const float colGap = innerPadX; // 列间中缝
-
-        // 估算理想宽度（含两侧 padding 各 1×、列内左右 padding 共 4×、中缝 1×）
-        const float epsilon = 1.0f; // 保险像素，避免边界裁切
-        float desiredWidth = labelW + valueWMax + innerPadX * 4.0f + colGap;
-        float tooltipWidth = std::max(knobWidth, desiredWidth);
-        tooltipWidth = std::min(tooltipWidth, tooltipMaxWidth);
-        tooltipWidth = std::ceil(tooltipWidth) + 1.0f; // 向上取整并+1px保险，避免早截断
-
-        const float innerPadY = std::clamp(lhH * 0.18f, 3.0f, 12.0f);
-        const float tooltipHeight = labelHeight + innerPadY * 2.0f; // 含上下内边距
-
-        const float tooltipLeft = center.x - tooltipWidth * 0.5f;
-        const float tooltipTop = labelOuterRect.bottom + std::clamp(lhH * 0.18f, 3.0f, 12.0f);
-        const auto tooltipRect = D2D1::RectF(
-            tooltipLeft,
-            tooltipTop,
-            tooltipLeft + tooltipWidth,
-            tooltipTop + tooltipHeight);
-
-        // 背景
-        if (baseBrush) {
-            const auto bubble = D2D1::RoundedRect(tooltipRect, 4.0f, 4.0f);
-            target->FillRoundedRectangle(bubble, baseBrush);
-        }
-
-        // 列宽分配：保证两列最小宽度（各含 2*padding），其余宽度按需分配
-        const float minLeft = labelW + innerPadX * 2.0f + epsilon;
-        const float minRight = valueWMax + innerPadX * 2.0f + epsilon;
-        float leftWidth = std::max(minLeft, tooltipWidth - (colGap + minRight));
-        float rightWidth = tooltipWidth - colGap - leftWidth;
-        if (rightWidth < minRight) {
-            rightWidth = minRight;
-            leftWidth = std::max(minLeft, tooltipWidth - (colGap + rightWidth));
-        }
-
-        // 左列矩形（垂直居中交由 TextFormat 的 ParagraphAlignment=CENTER）
-        const auto leftRect = D2D1::RectF(
-            tooltipRect.left + innerPadX,
-            tooltipRect.top + innerPadY,
-            tooltipRect.left + leftWidth - innerPadX,
-            tooltipRect.bottom - innerPadY);
-        target->DrawText(label_.c_str(), static_cast<UINT32>(label_.size()),
-                         textFormat, leftRect, textBrush);
-
-        // 右列矩形
-        const auto rightRect = D2D1::RectF(
-            leftRect.right + colGap,
-            tooltipRect.top + innerPadY,
-            tooltipRect.right - innerPadX,
-            tooltipRect.bottom - innerPadY);
-        ID2D1SolidColorBrush* valueBrush = accentBrush ? accentBrush : textBrush;
-        target->DrawText(valueBuffer, static_cast<UINT32>(wcslen(valueBuffer)),
-                         textFormat, rightRect, valueBrush);
-    }
-
+        layout.center.x + std::cos(angle) * pointerLen,
+        layout.center.y + std::sin(angle) * pointerLen);
+    target->DrawLine(layout.center, pointerEnd, pointerBrush, pointerWidth);
 
     // 调试叠加：以统一盒模型样式绘制外框。
 #if SATORI_UI_DEBUG_ENABLED
-    const auto slotRect = D2D1::RectF(center.x - outerRadius,
-                                      center.y - outerRadius,
-                                      center.x + outerRadius,
-                                      center.y + outerRadius);
-    updateDebugRects(bounds_, slotRect, labelOuterRect);
+    const auto slotRect = D2D1::RectF(layout.center.x - layout.outerRadius,
+                                      layout.center.y - layout.outerRadius,
+                                      layout.center.x + layout.outerRadius,
+                                      layout.center.y + layout.outerRadius);
+    updateDebugRects(bounds_, slotRect, layout.labelOuterRect);
 #endif
+}
+
+void ParameterKnob::drawTooltip(ID2D1HwndRenderTarget* target,
+                                ID2D1SolidColorBrush* baseBrush,
+                                ID2D1SolidColorBrush* fillBrush,
+                                ID2D1SolidColorBrush* accentBrush,
+                                ID2D1SolidColorBrush* textBrush,
+                                IDWriteTextFormat* textFormat) const {
+    (void)fillBrush;
+    if (!dragging_ || !target || !baseBrush || !textBrush || !textFormat) {
+        return;
+    }
+
+    Layout layout{};
+    float lineHeight = 0.0f;
+    if (!computeLayout(textFormat, &layout, &lineHeight)) {
+        return;
+    }
+
+    float norm = 0.0f;
+    const float range = (max_ - min_);
+    if (range > 1e-6f) {
+        norm = (value_ - min_) / range;
+    }
+    norm = std::clamp(norm, 0.0f, 1.0f);
+    const int percent = static_cast<int>(std::lround(norm * 100.0f));
+    wchar_t valueBuffer[64];
+    std::swprintf(valueBuffer, std::size(valueBuffer), L"%d%%", percent);
+
+    float lhW = 0.0f;
+    float lhH = lineHeight;
+    (void)MeasureText(textFormat, L"Hg", 2, 10000.0f, &lhW, &lhH);
+
+    float labelW = layout.labelTextWidth > 0.0f ? layout.labelTextWidth : lhH;
+    float labelH = lhH;
+    (void)MeasureText(textFormat, label_.c_str(),
+                      static_cast<UINT32>(label_.size()), 10000.0f, &labelW,
+                      &labelH);
+    (void)labelH;
+
+    float valueW = 0.0f;
+    float valueH = lhH;
+    (void)MeasureText(textFormat, valueBuffer,
+                      static_cast<UINT32>(wcslen(valueBuffer)), 10000.0f,
+                      &valueW, &valueH);
+    (void)valueH;
+
+    float w100 = 0.0f;
+    float hTmp = lhH;
+    (void)MeasureText(textFormat, L"100%", 4, 10000.0f, &w100, &hTmp);
+    float w88 = 0.0f;
+    hTmp = lhH;
+    (void)MeasureText(textFormat, L"88%", 3, 10000.0f, &w88, &hTmp);
+    float w0 = 0.0f;
+    hTmp = lhH;
+    (void)MeasureText(textFormat, L"0%", 2, 10000.0f, &w0, &hTmp);
+    const float valueWMax = std::max(w100, std::max(w88, w0));
+
+    const float knobWidth = layout.outerRadius * 2.0f;
+    const float tooltipMaxWidth = knobWidth * 2.0f;
+    const float innerPadX = std::clamp(lhH * 0.22f, 4.0f, 10.0f);
+    const float colGap = innerPadX;  // 列间中缝
+
+    const float epsilon = 1.0f;  // 保险像素，避免边界裁切
+    float desiredWidth =
+        labelW + valueWMax + innerPadX * 4.0f + colGap;
+    float tooltipWidth = std::max(knobWidth, desiredWidth);
+    tooltipWidth = std::min(tooltipWidth, tooltipMaxWidth);
+    tooltipWidth = std::ceil(tooltipWidth) +
+                   1.0f;  // 向上取整并+1px保险，避免早截断
+
+    const float innerPadY = std::clamp(lhH * 0.18f, 3.0f, 12.0f);
+    const float tooltipHeight =
+        layout.labelHeight + innerPadY * 2.0f;  // 含上下内边距
+
+    const float tooltipLeft = layout.center.x - tooltipWidth * 0.5f;
+    const float tooltipTop =
+        layout.labelOuterRect.bottom + std::clamp(lhH * 0.18f, 3.0f, 12.0f);
+    const auto tooltipRect = D2D1::RectF(
+        tooltipLeft, tooltipTop, tooltipLeft + tooltipWidth,
+        tooltipTop + tooltipHeight);
+    if (tooltipRect.right <= tooltipRect.left ||
+        tooltipRect.bottom <= tooltipRect.top) {
+        return;
+    }
+
+    if (baseBrush) {
+        auto shadowRect = tooltipRect;
+        shadowRect.top += 2.0f;
+        shadowRect.bottom += 2.0f;
+        ComPtr<ID2D1SolidColorBrush> shadowBrush;
+        if (SUCCEEDED(target->CreateSolidColorBrush(
+                D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.35f), &shadowBrush))) {
+            const auto shadowBubble =
+                D2D1::RoundedRect(shadowRect, 4.0f, 4.0f);
+            target->FillRoundedRectangle(shadowBubble, shadowBrush.Get());
+        }
+
+        const auto bubble = D2D1::RoundedRect(tooltipRect, 4.0f, 4.0f);
+        target->FillRoundedRectangle(bubble, baseBrush);
+    }
+
+    const float minLeft = labelW + innerPadX * 2.0f + epsilon;
+    const float minRight = valueWMax + innerPadX * 2.0f + epsilon;
+    float leftWidth = std::max(minLeft, tooltipWidth - (colGap + minRight));
+    float rightWidth = tooltipWidth - colGap - leftWidth;
+    if (rightWidth < minRight) {
+        rightWidth = minRight;
+        leftWidth = std::max(minLeft, tooltipWidth - (colGap + rightWidth));
+    }
+
+    const auto leftRect = D2D1::RectF(
+        tooltipRect.left + innerPadX, tooltipRect.top + innerPadY,
+        tooltipRect.left + leftWidth - innerPadX,
+        tooltipRect.bottom - innerPadY);
+    target->DrawText(label_.c_str(), static_cast<UINT32>(label_.size()),
+                     textFormat, leftRect, textBrush);
+
+    const auto rightRect = D2D1::RectF(
+        leftRect.right + colGap, tooltipRect.top + innerPadY,
+        tooltipRect.right - innerPadX, tooltipRect.bottom - innerPadY);
+    ID2D1SolidColorBrush* valueBrush =
+        accentBrush ? accentBrush : textBrush;
+    target->DrawText(valueBuffer, static_cast<UINT32>(wcslen(valueBuffer)),
+                     textFormat, rightRect, valueBrush);
 }
 
 bool ParameterKnob::hitTest(float x, float y) const {

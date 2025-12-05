@@ -169,9 +169,9 @@ void KnobPanelNode::draw(const RenderResources& resources) {
             if (!entry.knob) {
                 continue;
             }
-            entry.knob->draw(resources.target, resources.trackBrush,
-                             resources.fillBrush, resources.accentBrush,
-                             resources.textBrush, resources.textFormat);
+            entry.knob->drawBody(resources.target, resources.trackBrush,
+                                 resources.fillBrush, resources.accentBrush,
+                                 resources.textBrush, resources.textFormat);
         }
 
     }

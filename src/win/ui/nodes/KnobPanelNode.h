@@ -28,6 +28,7 @@ public:
     bool onPointerMove(float x, float y) override;
     void onPointerUp() override;
     std::optional<DebugBoxModel> debugBoxForPoint(float x, float y) const;
+    std::shared_ptr<ParameterKnob> activeKnob() const;
 
 private:
     struct KnobEntry {
@@ -47,7 +48,6 @@ private:
     float padding_ = 8.0f;
 
     void rebuildGroups(const std::vector<SliderDescriptor>& descriptors);
-    std::shared_ptr<ParameterKnob> activeKnob() const;
 };
 
 }  // namespace winui

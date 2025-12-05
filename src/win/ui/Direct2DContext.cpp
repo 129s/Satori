@@ -499,7 +499,15 @@ void Direct2DContext::render() {
     }
 
     if (rootLayout_) {
-        rootLayout_->draw(makeResources());
+        auto resources = makeResources();
+        rootLayout_->draw(resources);
+        if (knobPanelNode_) {
+            if (auto knob = knobPanelNode_->activeKnob()) {
+                knob->drawTooltip(resources.target, resources.trackBrush,
+                                  resources.fillBrush, resources.accentBrush,
+                                  resources.textBrush, resources.textFormat);
+            }
+        }
 #if SATORI_UI_DEBUG_ENABLED
         drawDebugOverlay();
 #endif
