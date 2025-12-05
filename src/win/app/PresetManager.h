@@ -16,10 +16,12 @@ public:
 
     bool load(const std::filesystem::path& path,
               synthesis::StringConfig& config,
+              float& masterGain,
               std::wstring& errorMessage) const;
 
     bool save(const std::filesystem::path& path,
               const synthesis::StringConfig& config,
+              float masterGain,
               std::wstring& errorMessage) const;
 
     const std::filesystem::path& root() const { return presetDir_; }
@@ -27,8 +29,9 @@ public:
 private:
     bool parse(const std::string& content,
                synthesis::StringConfig& config,
+               float& masterGain,
                std::wstring& errorMessage) const;
-    static std::string serialize(const synthesis::StringConfig& config);
+    static std::string serialize(const synthesis::StringConfig& config, float masterGain);
 
     std::filesystem::path presetDir_;
 };

@@ -21,7 +21,9 @@ bool SatoriRealtimeEngine::initialize() {
     if (ok) {
         audioConfig_ = audioEngine_.config();
         synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+        synthEngine_.setSampleRate(synthConfig_.sampleRate);
         synthEngine_.setConfig(synthConfig_);
+        masterGain_ = synthEngine_.getParam(engine::ParamId::MasterGain);
     }
     return ok;
 }
@@ -44,9 +46,30 @@ void SatoriRealtimeEngine::triggerNote(double frequency, double durationSeconds)
 }
 
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
-    synthConfig_ = config;
-    synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
-    synthEngine_.setConfig(synthConfig_);
+    synthesis::StringConfig clamped = config;
+    clamped.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+    synthConfig_ = clamped;
+    synthEngine_.setSampleRate(clamped.sampleRate);
+    synthEngine_.setConfig(clamped);
+    masterGain_ = synthEngine_.getParam(engine::ParamId::MasterGain);
+}
+
+void SatoriRealtimeEngine::setParam(engine::ParamId id, float value) {
+    synthEngine_.setParam(id, value);
+    synthConfig_ = synthEngine_.stringConfig();
+    masterGain_ = synthEngine_.getParam(engine::ParamId::MasterGain);
+}
+
+float SatoriRealtimeEngine::getParam(engine::ParamId id) const {
+    return synthEngine_.getParam(id);
+}
+
+void SatoriRealtimeEngine::setMasterGain(float value) {
+    setParam(engine::ParamId::MasterGain, value);
+}
+
+float SatoriRealtimeEngine::masterGain() const {
+    return synthEngine_.getParam(engine::ParamId::MasterGain);
 }
 
 void SatoriRealtimeEngine::handleRender(float* output, std::size_t frames) {

@@ -6,6 +6,9 @@
 #include <optional>
 #include <sstream>
 
+#include "engine/StringParams.h"
+#include "engine/StringSynthEngine.h"
+
 namespace winapp {
 
 namespace {
@@ -84,6 +87,7 @@ std::filesystem::path PresetManager::userPresetPath() const {
 
 bool PresetManager::load(const std::filesystem::path& path,
                          synthesis::StringConfig& config,
+                         float& masterGain,
                          std::wstring& errorMessage) const {
     std::ifstream stream(path);
     if (!stream.is_open()) {
@@ -92,11 +96,12 @@ bool PresetManager::load(const std::filesystem::path& path,
     }
     std::stringstream buffer;
     buffer << stream.rdbuf();
-    return parse(buffer.str(), config, errorMessage);
+    return parse(buffer.str(), config, masterGain, errorMessage);
 }
 
 bool PresetManager::save(const std::filesystem::path& path,
                          const synthesis::StringConfig& config,
+                         float masterGain,
                          std::wstring& errorMessage) const {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -105,7 +110,7 @@ bool PresetManager::save(const std::filesystem::path& path,
         errorMessage = L"无法写入预设文件: " + path.wstring();
         return false;
     }
-    stream << serialize(config);
+    stream << serialize(config, masterGain);
     if (!stream.good()) {
         errorMessage = L"写入预设内容失败: " + path.wstring();
         return false;
@@ -115,48 +120,68 @@ bool PresetManager::save(const std::filesystem::path& path,
 
 bool PresetManager::parse(const std::string& content,
                           synthesis::StringConfig& config,
+                          float& masterGain,
                           std::wstring& errorMessage) const {
+    engine::StringSynthEngine params(config);
+    params.setParam(engine::ParamId::MasterGain, masterGain);
+
     bool ok = false;
     if (auto decay = ExtractValue(content, "decay")) {
-        config.decay = ParseFloat(*decay, ok);
+        const float value = ParseFloat(*decay, ok);
         if (!ok) {
             errorMessage = L"解析 decay 失败";
             return false;
         }
+        params.setParam(engine::ParamId::Decay, value);
     }
     if (auto brightness = ExtractValue(content, "brightness")) {
-        config.brightness = ParseFloat(*brightness, ok);
+        const float value = ParseFloat(*brightness, ok);
         if (!ok) {
             errorMessage = L"解析 brightness 失败";
             return false;
         }
+        params.setParam(engine::ParamId::Brightness, value);
     }
     if (auto pickPos = ExtractValue(content, "pickPosition")) {
-        config.pickPosition = ParseFloat(*pickPos, ok);
+        const float value = ParseFloat(*pickPos, ok);
         if (!ok) {
             errorMessage = L"解析 pickPosition 失败";
             return false;
         }
+        params.setParam(engine::ParamId::PickPosition, value);
     }
     if (auto lowpass = ExtractValue(content, "enableLowpass")) {
-        config.enableLowpass = ParseBool(*lowpass, ok);
+        const bool value = ParseBool(*lowpass, ok);
         if (!ok) {
             errorMessage = L"解析 enableLowpass 失败";
             return false;
         }
+        params.setParam(engine::ParamId::EnableLowpass, value ? 1.0f : 0.0f);
     }
     if (auto noise = ExtractValue(content, "noiseType")) {
         auto lower = ToLower(*noise);
         if (lower == "binary") {
-            config.noiseType = synthesis::NoiseType::Binary;
+            params.setParam(engine::ParamId::NoiseType, 1.0f);
         } else {
-            config.noiseType = synthesis::NoiseType::White;
+            params.setParam(engine::ParamId::NoiseType, 0.0f);
         }
     }
+    if (auto gain = ExtractValue(content, "masterGain")) {
+        const float value = ParseFloat(*gain, ok);
+        if (!ok) {
+            errorMessage = L"解析 masterGain 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::MasterGain, value);
+    }
+
+    config = params.stringConfig();
+    masterGain = params.getParam(engine::ParamId::MasterGain);
     return true;
 }
 
-std::string PresetManager::serialize(const synthesis::StringConfig& config) {
+std::string PresetManager::serialize(const synthesis::StringConfig& config,
+                                     float masterGain) {
     std::ostringstream oss;
     oss << "{\n"
         << "  \"decay\": " << config.decay << ",\n"
@@ -164,7 +189,8 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config) {
         << "  \"pickPosition\": " << config.pickPosition << ",\n"
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")
-        << "\"\n"
+        << "\",\n"
+        << "  \"masterGain\": " << masterGain << "\n"
         << "}\n";
     return oss.str();
 }

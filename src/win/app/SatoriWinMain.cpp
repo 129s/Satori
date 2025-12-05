@@ -76,6 +76,7 @@ private:
     std::unique_ptr<winui::Direct2DContext> d2d_;
     std::unique_ptr<winapp::PresetManager> presetManager_;
     synthesis::StringConfig synthConfig_{};
+    float masterGain_ = 1.0f;
     bool audioReady_ = false;
     std::wstring audioStatus_ = L"音频：未初始化";
     std::wstring presetStatus_ = L"预设：默认";
@@ -102,6 +103,7 @@ bool SatoriAppState::initialize(HWND hwnd) {
     }
 
     synthConfig_ = engine_->synthConfig();
+    masterGain_ = engine_->masterGain();
     initializeKeyBindings();
     initializePresetSupport();
     refreshWaveformPreview();
@@ -200,6 +202,9 @@ void SatoriAppState::updatePresetStatus(const std::wstring& text) {
 void SatoriAppState::syncSynthConfig() {
     if (engine_) {
         engine_->setSynthConfig(synthConfig_);
+        engine_->setMasterGain(masterGain_);
+        synthConfig_ = engine_->synthConfig();
+        masterGain_ = engine_->masterGain();
     }
 }
 
@@ -210,6 +215,10 @@ std::vector<float> SatoriAppState::generateWaveform(double frequency) {
     const std::size_t maxSamples = 2048;
     if (samples.size() > maxSamples) {
         samples.resize(maxSamples);
+    }
+    const float gain = masterGain_;
+    for (auto& sample : samples) {
+        sample *= gain;
     }
     return samples;
 }
@@ -245,7 +254,7 @@ void SatoriAppState::initializePresetSupport() {
     const auto defaultPreset = presetManager_->defaultPresetPath();
     if (std::filesystem::exists(defaultPreset)) {
         std::wstring error;
-        if (presetManager_->load(defaultPreset, synthConfig_, error)) {
+        if (presetManager_->load(defaultPreset, synthConfig_, masterGain_, error)) {
             syncSynthConfig();
             if (d2d_) {
                 d2d_->syncSliders();
@@ -273,11 +282,13 @@ void SatoriAppState::handleLoadPreset() {
         return;
     }
     std::wstring error;
-    if (!presetManager_->load(path, synthConfig_, error)) {
+    float loadedGain = masterGain_;
+    if (!presetManager_->load(path, synthConfig_, loadedGain, error)) {
         MessageBoxW(window_, error.c_str(), kWindowTitle,
                     MB_ICONWARNING | MB_OK);
         return;
     }
+    masterGain_ = loadedGain;
     syncSynthConfig();
     if (d2d_) {
         d2d_->syncSliders();
@@ -292,7 +303,7 @@ void SatoriAppState::handleSavePreset() {
     }
     std::wstring error;
     const auto path = presetManager_->userPresetPath();
-    if (!presetManager_->save(path, synthConfig_, error)) {
+    if (!presetManager_->save(path, synthConfig_, masterGain_, error)) {
         MessageBoxW(window_, error.c_str(), kWindowTitle,
                     MB_ICONWARNING | MB_OK);
         return;

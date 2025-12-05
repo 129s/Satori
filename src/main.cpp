@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "audio/WaveWriter.h"
+#include "engine/StringSynthEngine.h"
 #include "synthesis/KarplusStrongString.h"
 #include "synthesis/KarplusStrongSynth.h"
 
@@ -152,13 +153,18 @@ int main(int argc, char** argv) {
     }
 
     synthesis::StringConfig synthConfig;
-    synthConfig.sampleRate = appConfig.sampleRate;
-    synthConfig.decay = appConfig.decay;
-    synthConfig.brightness = appConfig.brightness;
-    synthConfig.pickPosition = appConfig.pickPosition;
-    synthConfig.enableLowpass = appConfig.enableLowpass;
-    synthConfig.noiseType = appConfig.noiseType;
+    engine::StringSynthEngine paramEngine;
+    paramEngine.setSampleRate(appConfig.sampleRate);
+    paramEngine.setParam(engine::ParamId::Decay, appConfig.decay);
+    paramEngine.setParam(engine::ParamId::Brightness, appConfig.brightness);
+    paramEngine.setParam(engine::ParamId::PickPosition, appConfig.pickPosition);
+    paramEngine.setParam(engine::ParamId::EnableLowpass, appConfig.enableLowpass ? 1.0f : 0.0f);
+    paramEngine.setParam(engine::ParamId::NoiseType,
+                         appConfig.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f);
+    paramEngine.setParam(engine::ParamId::MasterGain, 1.0f);
+    synthConfig = paramEngine.stringConfig();
     synthConfig.seed = appConfig.seed;
+    const float masterGain = paramEngine.getParam(engine::ParamId::MasterGain);
 
     std::vector<float> samples;
     if (!appConfig.notes.empty()) {
@@ -172,6 +178,11 @@ int main(int argc, char** argv) {
     } else {
         synthesis::KarplusStrongString ks(synthConfig);
         samples = ks.pluck(appConfig.frequency, appConfig.duration);
+    }
+    if (masterGain != 1.0f) {
+        for (auto& sample : samples) {
+            sample *= masterGain;
+        }
     }
     if (samples.empty()) {
         std::cerr << "生成样本失败，请检查输入参数。\n";

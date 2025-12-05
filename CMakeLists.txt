@@ -17,6 +17,7 @@ endif()
 add_library(SatoriCoreLib STATIC
     src/audio/WaveWriter.cpp
     src/dsp/Filter.cpp
+    src/engine/StringParams.cpp
     src/engine/StringSynthEngine.cpp
     src/synthesis/KarplusStrongString.cpp
     src/synthesis/KarplusStrongSynth.cpp
@@ -116,6 +117,7 @@ target_include_directories(Catch2Amalgamated PUBLIC third_party/catch2)
 set(TEST_SOURCES
     tests/main.cpp
     tests/core_tests.cpp
+    tests/string_params_tests.cpp
 )
 if (WIN32)
     list(APPEND TEST_SOURCES tests/win_audio_tests.cpp)
