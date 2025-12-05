@@ -25,21 +25,6 @@ constexpr int kMinClientHeight = 720;
 constexpr int kKeyboardBaseMidiNote = 48;  // C3
 constexpr int kKeyboardOctaveCount = 3;
 
-std::unique_ptr<winaudio::SatoriRealtimeEngine> g_engine;
-std::unique_ptr<winui::Direct2DContext> g_d2d;
-std::unique_ptr<winapp::PresetManager> g_presetManager;
-synthesis::StringConfig g_synthConfig{};
-HWND g_mainWindow = nullptr;
-bool g_audioReady = false;
-std::wstring g_audioStatus = L"音频：未初始化";
-std::wstring g_presetStatus = L"预设：默认";
-std::vector<float> g_waveformSamples;
-#if SATORI_UI_DEBUG_ENABLED
-bool g_trackingMouseLeave = false;
-#endif
-std::unordered_map<UINT, int> g_virtualKeyToMidi;
-std::unordered_map<UINT, int> g_activeVirtualKeys;
-
 std::wstring ToWide(const std::string& text) {
     return std::wstring(text.begin(), text.end());
 }
@@ -51,93 +36,103 @@ std::filesystem::path GetExecutableDir() {
     return exePath.remove_filename();
 }
 
-void RefreshUI();
-winui::UIModel BuildUIModel();
+class SatoriAppState {
+public:
+    bool initialize(HWND hwnd);
+    void shutdown();
 
-void UpdateAudioStatus(HWND hwnd, bool showDialog) {
-    if (g_audioReady) {
-        std::wstringstream ss;
-        ss << L"音频：在线 (" << static_cast<int>(g_synthConfig.sampleRate) << L" Hz)";
-        g_audioStatus = ss.str();
-    } else {
-        std::wstring message = L"音频：离线";
-        if (g_engine) {
-            const auto& lastError = g_engine->lastError();
-            if (!lastError.empty()) {
-                message += L"\n";
-                message += ToWide(lastError);
-            }
-        }
-        g_audioStatus = message;
-        if (showDialog && hwnd) {
-            MessageBoxW(hwnd, message.c_str(), kWindowTitle,
-                        MB_ICONWARNING | MB_OK);
-        }
+    void onSize(int width, int height);
+    void onPaint();
+    bool onKeyDown(UINT vk, LPARAM lparam);
+    bool onKeyUp(UINT vk);
+    bool onPointerDown(float x, float y);
+    bool onPointerMove(float x, float y);
+    void onPointerUp();
+#if SATORI_UI_DEBUG_ENABLED
+    void onMouseLeave();
+#endif
+    void onDeactivate();
+
+private:
+    winui::UIModel buildUIModel();
+    void refreshUI();
+    void updateAudioStatus(bool showDialog);
+    void updatePresetStatus(const std::wstring& text);
+    void syncSynthConfig();
+    std::vector<float> generateWaveform(double frequency);
+    void refreshWaveformPreview(double frequency = 440.0);
+    void triggerFrequency(double frequency);
+    void initializeKeyBindings();
+    void initializePresetSupport();
+    void handleLoadPreset();
+    void handleSavePreset();
+    bool handleMidiKeyDown(UINT vk, LPARAM lparam);
+    bool handleMidiKeyUp(UINT vk);
+    void releaseAllVirtualKeys();
+
+    HWND window_ = nullptr;
+    std::unique_ptr<winaudio::SatoriRealtimeEngine> engine_;
+    std::unique_ptr<winui::Direct2DContext> d2d_;
+    std::unique_ptr<winapp::PresetManager> presetManager_;
+    synthesis::StringConfig synthConfig_{};
+    bool audioReady_ = false;
+    std::wstring audioStatus_ = L"音频：未初始化";
+    std::wstring presetStatus_ = L"预设：默认";
+    std::vector<float> waveformSamples_;
+#if SATORI_UI_DEBUG_ENABLED
+    bool trackingMouseLeave_ = false;
+#endif
+    std::unordered_map<UINT, int> virtualKeyToMidi_;
+    std::unordered_map<UINT, int> activeVirtualKeys_;
+};
+
+bool SatoriAppState::initialize(HWND hwnd) {
+    window_ = hwnd;
+    engine_ = std::make_unique<winaudio::SatoriRealtimeEngine>();
+    const bool initialized = engine_->initialize();
+    audioReady_ = initialized && engine_->start();
+
+    d2d_ = std::make_unique<winui::Direct2DContext>();
+    if (!d2d_->initialize(hwnd)) {
+        MessageBoxW(hwnd, L"初始化 Direct2D 失败", kWindowTitle,
+                    MB_ICONERROR | MB_OK);
+        PostQuitMessage(-1);
+        return false;
     }
-    RefreshUI();
+
+    synthConfig_ = engine_->synthConfig();
+    initializeKeyBindings();
+    initializePresetSupport();
+    refreshWaveformPreview();
+    refreshUI();
+    updateAudioStatus(!audioReady_);
+    return true;
 }
 
-void UpdatePresetStatus(const std::wstring& text) {
-    g_presetStatus = text;
-    RefreshUI();
+void SatoriAppState::shutdown() {
+    if (engine_) {
+        engine_->stop();
+        engine_->shutdown();
+        engine_.reset();
+    }
+    releaseAllVirtualKeys();
+    d2d_.reset();
+    presetManager_.reset();
+    window_ = nullptr;
 }
 
-void SyncSynthConfig() {
-    if (g_engine) {
-        g_engine->setSynthConfig(g_synthConfig);
-    }
-}
-
-std::vector<float> GenerateWaveform(double frequency) {
-    const double duration = 0.5;
-    synthesis::KarplusStrongString string(g_synthConfig);
-    auto samples = string.pluck(frequency, duration);
-    const std::size_t maxSamples = 2048;
-    if (samples.size() > maxSamples) {
-        samples.resize(maxSamples);
-    }
-    return samples;
-}
-
-void HandleLoadPreset();
-void HandleSavePreset();
-
-void RefreshWaveformPreview(double frequency = 440.0) {
-    g_waveformSamples = GenerateWaveform(frequency);
-    if (g_d2d) {
-        g_d2d->updateWaveformSamples(g_waveformSamples);
-    }
-    if (g_mainWindow) {
-        InvalidateRect(g_mainWindow, nullptr, FALSE);
-    }
-}
-
-void TriggerFrequency(double frequency) {
-    if (frequency <= 0.0) {
-        return;
-    }
-    if (g_engine && g_audioReady) {
-        g_engine->triggerNote(frequency, 2.0);
-    }
-    RefreshWaveformPreview(frequency);
-}
-
-void InitializeKeyBindings();
-bool HandleMidiKeyDown(UINT vk, LPARAM lparam);
-bool HandleMidiKeyUp(UINT vk);
-void ReleaseAllVirtualKeys();
-
-winui::UIModel BuildUIModel() {
+winui::UIModel SatoriAppState::buildUIModel() {
     winui::UIModel model;
-    model.status.primary = g_audioStatus;
-    model.waveformSamples = g_waveformSamples;
-    model.audioOnline = g_audioReady;
-    model.sampleRate = static_cast<float>(g_synthConfig.sampleRate);
-    model.diagram.decay = g_synthConfig.decay;
-    model.diagram.brightness = g_synthConfig.brightness;
-    model.diagram.pickPosition = g_synthConfig.pickPosition;
+    model.status.primary = audioStatus_;
+    model.status.secondary = presetStatus_;
+    model.waveformSamples = waveformSamples_;
+    model.audioOnline = audioReady_;
+    model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
+    model.diagram.decay = synthConfig_.decay;
+    model.diagram.brightness = synthConfig_.brightness;
+    model.diagram.pickPosition = synthConfig_.pickPosition;
     model.diagram.noiseType =
-        (g_synthConfig.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
+        (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
 
     auto addSlider = [&](const std::wstring& label, float min, float max,
                          float& field) {
@@ -146,95 +141,100 @@ winui::UIModel BuildUIModel() {
         desc.min = min;
         desc.max = max;
         desc.getter = [&field]() { return field; };
-        desc.setter = [&field](float value) {
+        desc.setter = [this, &field](float value) {
             field = value;
-            SyncSynthConfig();
-            RefreshWaveformPreview();
+            syncSynthConfig();
+            refreshWaveformPreview();
         };
         model.sliders.push_back(std::move(desc));
     };
-    addSlider(L"Decay", 0.90f, 0.999f, g_synthConfig.decay);
-    addSlider(L"Brightness", 0.0f, 1.0f, g_synthConfig.brightness);
-    addSlider(L"Pick Position", 0.05f, 0.95f, g_synthConfig.pickPosition);
+    addSlider(L"Decay", 0.90f, 0.999f, synthConfig_.decay);
+    addSlider(L"Brightness", 0.0f, 1.0f, synthConfig_.brightness);
+    addSlider(L"Pick Position", 0.05f, 0.95f, synthConfig_.pickPosition);
 
     model.keyboardConfig.baseMidiNote = kKeyboardBaseMidiNote;
     model.keyboardConfig.octaveCount = kKeyboardOctaveCount;
     model.keyboardConfig.showLabels = false;
     model.keyboardConfig.hoverOutline = false;
-    model.keyCallback = [](double freq) { TriggerFrequency(freq); };
+    model.keyCallback = [this](double freq) { triggerFrequency(freq); };
 
     return model;
 }
 
-void RefreshUI() {
-    if (!g_d2d) {
+void SatoriAppState::refreshUI() {
+    if (!d2d_) {
         return;
     }
-    g_d2d->setModel(BuildUIModel());
+    d2d_->setModel(buildUIModel());
 }
 
-void InitializePresetSupport(HWND hwnd) {
-    const auto presetDir = GetExecutableDir() / L"presets";
-    g_presetManager = std::make_unique<winapp::PresetManager>(presetDir);
-    const auto defaultPreset = g_presetManager->defaultPresetPath();
-    if (std::filesystem::exists(defaultPreset)) {
-        std::wstring error;
-        if (g_presetManager->load(defaultPreset, g_synthConfig, error)) {
-            SyncSynthConfig();
-            if (g_d2d) {
-                g_d2d->syncSliders();
+void SatoriAppState::updateAudioStatus(bool showDialog) {
+    if (audioReady_) {
+        std::wstringstream ss;
+        ss << L"音频：在线 (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz)";
+        audioStatus_ = ss.str();
+    } else {
+        std::wstring message = L"音频：离线";
+        if (engine_) {
+            const auto& lastError = engine_->lastError();
+            if (!lastError.empty()) {
+                message += L"\n";
+                message += ToWide(lastError);
             }
-            RefreshWaveformPreview();
-            UpdatePresetStatus(L"预设：" + defaultPreset.filename().wstring());
-        } else if (hwnd) {
-            MessageBoxW(hwnd, error.c_str(), kWindowTitle, MB_ICONWARNING | MB_OK);
+        }
+        audioStatus_ = message;
+        if (showDialog && window_) {
+            MessageBoxW(window_, message.c_str(), kWindowTitle,
+                        MB_ICONWARNING | MB_OK);
         }
     }
+    refreshUI();
 }
 
-void HandleLoadPreset() {
-    if (!g_presetManager) {
-        return;
-    }
-    auto path = g_presetManager->userPresetPath();
-    if (!std::filesystem::exists(path)) {
-        path = g_presetManager->defaultPresetPath();
-    }
-    if (!std::filesystem::exists(path)) {
-        MessageBoxW(g_mainWindow, L"未找到可用预设文件", kWindowTitle,
-                    MB_ICONWARNING | MB_OK);
-        return;
-    }
-    std::wstring error;
-    if (!g_presetManager->load(path, g_synthConfig, error)) {
-        MessageBoxW(g_mainWindow, error.c_str(), kWindowTitle,
-                    MB_ICONWARNING | MB_OK);
-        return;
-    }
-    SyncSynthConfig();
-    if (g_d2d) {
-        g_d2d->syncSliders();
-    }
-    RefreshWaveformPreview();
-    UpdatePresetStatus(L"预设：" + path.filename().wstring());
+void SatoriAppState::updatePresetStatus(const std::wstring& text) {
+    presetStatus_ = text;
+    refreshUI();
 }
 
-void HandleSavePreset() {
-    if (!g_presetManager) {
-        return;
+void SatoriAppState::syncSynthConfig() {
+    if (engine_) {
+        engine_->setSynthConfig(synthConfig_);
     }
-    std::wstring error;
-    const auto path = g_presetManager->userPresetPath();
-    if (!g_presetManager->save(path, g_synthConfig, error)) {
-        MessageBoxW(g_mainWindow, error.c_str(), kWindowTitle,
-                    MB_ICONWARNING | MB_OK);
-        return;
-    }
-    UpdatePresetStatus(L"预设：已保存到 " + path.filename().wstring());
 }
 
-void InitializeKeyBindings() {
-    g_virtualKeyToMidi.clear();
+std::vector<float> SatoriAppState::generateWaveform(double frequency) {
+    const double duration = 0.5;
+    synthesis::KarplusStrongString string(synthConfig_);
+    auto samples = string.pluck(frequency, duration);
+    const std::size_t maxSamples = 2048;
+    if (samples.size() > maxSamples) {
+        samples.resize(maxSamples);
+    }
+    return samples;
+}
+
+void SatoriAppState::refreshWaveformPreview(double frequency) {
+    waveformSamples_ = generateWaveform(frequency);
+    if (d2d_) {
+        d2d_->updateWaveformSamples(waveformSamples_);
+    }
+    if (window_) {
+        InvalidateRect(window_, nullptr, FALSE);
+    }
+}
+
+void SatoriAppState::triggerFrequency(double frequency) {
+    if (frequency <= 0.0) {
+        return;
+    }
+    if (engine_ && audioReady_) {
+        engine_->triggerNote(frequency, 2.0);
+    }
+    refreshWaveformPreview(frequency);
+}
+
+void SatoriAppState::initializeKeyBindings() {
+    virtualKeyToMidi_.clear();
     struct KeyBinding {
         UINT vk = 0;
         int semitoneOffset = 0;
@@ -247,84 +247,229 @@ void InitializeKeyBindings() {
         {'W', 1}, {'E', 3}, {'T', 6}, {'Y', 8}, {'U', 10},
     };
     for (const auto& binding : kWhiteBindings) {
-        g_virtualKeyToMidi[binding.vk] =
+        virtualKeyToMidi_[binding.vk] =
             kKeyboardBaseMidiNote + binding.semitoneOffset;
     }
     for (const auto& binding : kBlackBindings) {
-        g_virtualKeyToMidi[binding.vk] =
+        virtualKeyToMidi_[binding.vk] =
             kKeyboardBaseMidiNote + binding.semitoneOffset;
     }
 }
 
-bool HandleMidiKeyDown(UINT vk, LPARAM lparam) {
-    if ((lparam & (1 << 30)) != 0) {  // autorepeat
-        return g_virtualKeyToMidi.find(vk) != g_virtualKeyToMidi.end();
+void SatoriAppState::initializePresetSupport() {
+    const auto presetDir = GetExecutableDir() / L"presets";
+    presetManager_ = std::make_unique<winapp::PresetManager>(presetDir);
+    const auto defaultPreset = presetManager_->defaultPresetPath();
+    if (std::filesystem::exists(defaultPreset)) {
+        std::wstring error;
+        if (presetManager_->load(defaultPreset, synthConfig_, error)) {
+            syncSynthConfig();
+            if (d2d_) {
+                d2d_->syncSliders();
+            }
+            refreshWaveformPreview();
+            updatePresetStatus(L"预设：" + defaultPreset.filename().wstring());
+        } else if (window_) {
+            MessageBoxW(window_, error.c_str(), kWindowTitle,
+                        MB_ICONWARNING | MB_OK);
+        }
     }
-    auto it = g_virtualKeyToMidi.find(vk);
-    if (it == g_virtualKeyToMidi.end()) {
+}
+
+void SatoriAppState::handleLoadPreset() {
+    if (!presetManager_) {
+        return;
+    }
+    auto path = presetManager_->userPresetPath();
+    if (!std::filesystem::exists(path)) {
+        path = presetManager_->defaultPresetPath();
+    }
+    if (!std::filesystem::exists(path)) {
+        MessageBoxW(window_, L"未找到可用预设文件", kWindowTitle,
+                    MB_ICONWARNING | MB_OK);
+        return;
+    }
+    std::wstring error;
+    if (!presetManager_->load(path, synthConfig_, error)) {
+        MessageBoxW(window_, error.c_str(), kWindowTitle,
+                    MB_ICONWARNING | MB_OK);
+        return;
+    }
+    syncSynthConfig();
+    if (d2d_) {
+        d2d_->syncSliders();
+    }
+    refreshWaveformPreview();
+    updatePresetStatus(L"预设：" + path.filename().wstring());
+}
+
+void SatoriAppState::handleSavePreset() {
+    if (!presetManager_) {
+        return;
+    }
+    std::wstring error;
+    const auto path = presetManager_->userPresetPath();
+    if (!presetManager_->save(path, synthConfig_, error)) {
+        MessageBoxW(window_, error.c_str(), kWindowTitle,
+                    MB_ICONWARNING | MB_OK);
+        return;
+    }
+    updatePresetStatus(L"预设：已保存到 " + path.filename().wstring());
+}
+
+bool SatoriAppState::handleMidiKeyDown(UINT vk, LPARAM lparam) {
+    if ((lparam & (1 << 30)) != 0) {  // autorepeat
+        return virtualKeyToMidi_.find(vk) != virtualKeyToMidi_.end();
+    }
+    auto it = virtualKeyToMidi_.find(vk);
+    if (it == virtualKeyToMidi_.end()) {
         return false;
     }
-    if (g_activeVirtualKeys.count(vk)) {
+    if (activeVirtualKeys_.count(vk)) {
         return true;
     }
     const int midi = it->second;
-    if (g_d2d && g_d2d->pressKeyboardKey(midi)) {
-        g_activeVirtualKeys.emplace(vk, midi);
-        if (g_mainWindow) {
-            InvalidateRect(g_mainWindow, nullptr, FALSE);
+    if (d2d_ && d2d_->pressKeyboardKey(midi)) {
+        activeVirtualKeys_.emplace(vk, midi);
+        if (window_) {
+            InvalidateRect(window_, nullptr, FALSE);
         }
         return true;
     }
     return false;
 }
 
-bool HandleMidiKeyUp(UINT vk) {
-    auto it = g_activeVirtualKeys.find(vk);
-    if (it == g_activeVirtualKeys.end()) {
+bool SatoriAppState::handleMidiKeyUp(UINT vk) {
+    auto it = activeVirtualKeys_.find(vk);
+    if (it == activeVirtualKeys_.end()) {
         return false;
     }
-    if (g_d2d) {
-        g_d2d->releaseKeyboardKey(it->second);
+    if (d2d_) {
+        d2d_->releaseKeyboardKey(it->second);
     }
-    g_activeVirtualKeys.erase(it);
-    if (g_mainWindow) {
-        InvalidateRect(g_mainWindow, nullptr, FALSE);
+    activeVirtualKeys_.erase(it);
+    if (window_) {
+        InvalidateRect(window_, nullptr, FALSE);
     }
     return true;
 }
 
-void ReleaseAllVirtualKeys() {
-    if (g_d2d) {
-        g_d2d->releaseAllKeyboardKeys();
+void SatoriAppState::releaseAllVirtualKeys() {
+    if (d2d_) {
+        d2d_->releaseAllKeyboardKeys();
     }
-    g_activeVirtualKeys.clear();
-    if (g_mainWindow) {
-        InvalidateRect(g_mainWindow, nullptr, FALSE);
+    activeVirtualKeys_.clear();
+    if (window_) {
+        InvalidateRect(window_, nullptr, FALSE);
     }
 }
 
+void SatoriAppState::onSize(int width, int height) {
+    if (d2d_) {
+        d2d_->resize(width, height);
+    }
+}
+
+void SatoriAppState::onPaint() {
+    if (d2d_) {
+        d2d_->render();
+    }
+}
+
+bool SatoriAppState::onKeyDown(UINT vk, LPARAM lparam) {
+#if SATORI_UI_DEBUG_ENABLED
+    if (vk == VK_F12) {
+        if (d2d_) {
+            d2d_->toggleDebugOverlay();
+            InvalidateRect(window_, nullptr, FALSE);
+        }
+        return true;
+    }
+#endif
+    if (vk == VK_F11) {
+        if (d2d_) {
+            d2d_->dumpLayoutDebugInfo();
+        }
+        return true;
+    }
+    return handleMidiKeyDown(vk, lparam);
+}
+
+bool SatoriAppState::onKeyUp(UINT vk) {
+    return handleMidiKeyUp(vk);
+}
+
+bool SatoriAppState::onPointerDown(float x, float y) {
+    if (d2d_ && d2d_->onPointerDown(x, y)) {
+        if (d2d_->hasPointerCapture()) {
+            SetCapture(window_);
+        }
+        InvalidateRect(window_, nullptr, FALSE);
+        return true;
+    }
+    return false;
+}
+
+bool SatoriAppState::onPointerMove(float x, float y) {
+#if SATORI_UI_DEBUG_ENABLED
+    if (!trackingMouseLeave_) {
+        TRACKMOUSEEVENT tme{};
+        tme.cbSize = sizeof(tme);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = window_;
+        if (TrackMouseEvent(&tme)) {
+            trackingMouseLeave_ = true;
+        }
+    }
+#endif
+    if (d2d_ && d2d_->onPointerMove(x, y)) {
+        InvalidateRect(window_, nullptr, FALSE);
+        return true;
+    }
+    return false;
+}
+
+void SatoriAppState::onPointerUp() {
+    if (d2d_) {
+        d2d_->onPointerUp();
+    }
+    ReleaseCapture();
+    InvalidateRect(window_, nullptr, FALSE);
+}
+
+#if SATORI_UI_DEBUG_ENABLED
+void SatoriAppState::onMouseLeave() {
+    trackingMouseLeave_ = false;
+    if (d2d_ && d2d_->onPointerLeave()) {
+        InvalidateRect(window_, nullptr, FALSE);
+    }
+}
+#endif
+
+void SatoriAppState::onDeactivate() {
+    releaseAllVirtualKeys();
+    if (d2d_) {
+        d2d_->onPointerUp();
+    }
+}
+
+SatoriAppState* GetAppState(HWND hwnd) {
+    return reinterpret_cast<SatoriAppState*>(
+        GetWindowLongPtr(hwnd, GWLP_USERDATA));
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    auto* state = GetAppState(hwnd);
     switch (msg) {
         case WM_CREATE: {
-            g_mainWindow = hwnd;
-            g_engine = std::make_unique<winaudio::SatoriRealtimeEngine>();
-            const bool initialized = g_engine->initialize();
-            g_audioReady = initialized && g_engine->start();
-
-            g_d2d = std::make_unique<winui::Direct2DContext>();
-            if (!g_d2d->initialize(hwnd)) {
-                MessageBoxW(hwnd, L"初始化 Direct2D 失败", kWindowTitle,
-                            MB_ICONERROR | MB_OK);
-                PostQuitMessage(-1);
-                return 0;
+            auto* newState = new SatoriAppState();
+            SetWindowLongPtr(hwnd, GWLP_USERDATA,
+                             reinterpret_cast<LONG_PTR>(newState));
+            if (!newState->initialize(hwnd)) {
+                newState->shutdown();
+                delete newState;
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
             }
-
-            g_synthConfig = g_engine->synthConfig();
-            InitializeKeyBindings();
-            InitializePresetSupport(hwnd);
-            RefreshWaveformPreview();
-            RefreshUI();
-            UpdateAudioStatus(hwnd, !g_audioReady);
             return 0;
         }
         case WM_GETMINMAXINFO: {
@@ -337,94 +482,59 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
         case WM_SIZE: {
-            if (g_d2d) {
-                g_d2d->resize(LOWORD(lparam), HIWORD(lparam));
+            if (state) {
+                state->onSize(LOWORD(lparam), HIWORD(lparam));
             }
             return 0;
         }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             BeginPaint(hwnd, &ps);
-            if (g_d2d) {
-                g_d2d->render();
+            if (state) {
+                state->onPaint();
             }
             EndPaint(hwnd, &ps);
             return 0;
         }
         case WM_KEYDOWN: {
-#if SATORI_UI_DEBUG_ENABLED
-            if (wparam == VK_F12) {
-                // F12：切换调试叠加（布局边界 + 旋钮盒模型）
-                if (g_d2d) {
-                    g_d2d->toggleDebugOverlay();
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                }
-                return 0;
-            }
-#endif
-            if (wparam == VK_F11) {
-                // F11：导出一次布局信息到调试输出，便于脚本/比对
-                if (g_d2d) {
-                    g_d2d->dumpLayoutDebugInfo();
-                }
-                return 0;
-            }
-
-            if (HandleMidiKeyDown(static_cast<UINT>(wparam), lparam)) {
+            if (state &&
+                state->onKeyDown(static_cast<UINT>(wparam), lparam)) {
                 return 0;
             }
             break;
         }
         case WM_KEYUP: {
-            if (HandleMidiKeyUp(static_cast<UINT>(wparam))) {
+            if (state && state->onKeyUp(static_cast<UINT>(wparam))) {
                 return 0;
             }
             break;
         }
         case WM_LBUTTONDOWN: {
-            if (g_d2d && g_d2d->onPointerDown(static_cast<float>(GET_X_LPARAM(lparam)),
-                                              static_cast<float>(GET_Y_LPARAM(lparam)))) {
-                if (g_d2d->hasPointerCapture()) {
-                    SetCapture(hwnd);
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (state &&
+                state->onPointerDown(static_cast<float>(GET_X_LPARAM(lparam)),
+                                     static_cast<float>(GET_Y_LPARAM(lparam)))) {
                 return 0;
             }
             break;
         }
         case WM_MOUSEMOVE: {
-#if SATORI_UI_DEBUG_ENABLED
-            if (!g_trackingMouseLeave) {
-                TRACKMOUSEEVENT tme{};
-                tme.cbSize = sizeof(tme);
-                tme.dwFlags = TME_LEAVE;
-                tme.hwndTrack = hwnd;
-                if (TrackMouseEvent(&tme)) {
-                    g_trackingMouseLeave = true;
-                }
-            }
-#endif
-            if (g_d2d &&
-                g_d2d->onPointerMove(static_cast<float>(GET_X_LPARAM(lparam)),
+            if (state &&
+                state->onPointerMove(static_cast<float>(GET_X_LPARAM(lparam)),
                                      static_cast<float>(GET_Y_LPARAM(lparam)))) {
-                InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
             break;
         }
         case WM_LBUTTONUP: {
-            if (g_d2d) {
-                g_d2d->onPointerUp();
+            if (state) {
+                state->onPointerUp();
             }
-            ReleaseCapture();
-            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         case WM_MOUSELEAVE: {
 #if SATORI_UI_DEBUG_ENABLED
-            g_trackingMouseLeave = false;
-            if (g_d2d && g_d2d->onPointerLeave()) {
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (state) {
+                state->onMouseLeave();
             }
 #endif
             return 0;
@@ -433,23 +543,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_CANCELMODE:
         case WM_ACTIVATE: {
             if (msg != WM_ACTIVATE || LOWORD(wparam) == WA_INACTIVE) {
-                ReleaseAllVirtualKeys();
-                if (g_d2d) {
-                    g_d2d->onPointerUp();
+                if (state) {
+                    state->onDeactivate();
                 }
             }
             break;
         }
         case WM_DESTROY:
-            if (g_engine) {
-                g_engine->stop();
-                g_engine->shutdown();
-                g_engine.reset();
+            if (state) {
+                state->shutdown();
+                delete state;
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
             }
-            ReleaseAllVirtualKeys();
-            g_d2d.reset();
-            g_presetManager.reset();
-            g_mainWindow = nullptr;
             PostQuitMessage(0);
             return 0;
         default:

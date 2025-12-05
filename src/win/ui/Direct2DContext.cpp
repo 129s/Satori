@@ -525,6 +525,7 @@ void Direct2DContext::rebuildLayout() {
     topBar->setSampleRate(model_.sampleRate);
     topBar->setAudioOnline(model_.audioOnline);
     topBar->setStatusText(model_.status.primary);
+    topBar->setSecondaryStatusText(model_.status.secondary);
     topBarNode_ = topBar;
 
     flowNode_ = std::make_shared<FlowDiagramNode>();
@@ -549,7 +550,7 @@ void Direct2DContext::rebuildLayout() {
 
     auto rootStack = std::make_shared<UIStackPanel>(8.0f);
     rootStack->setItems({
-        {topBar, {UISizeMode::kFixed, 40.0f, 32.0f}},
+        {topBar, {UISizeMode::kAuto, 0.0f, 40.0f}},
         {mainStack, {UISizeMode::kAuto, 0.0f, 400.0f}},
         {keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}},
     });

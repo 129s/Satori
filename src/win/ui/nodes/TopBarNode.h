@@ -16,6 +16,7 @@ public:
     void setSampleRate(float sampleRate);
     void setAudioOnline(bool online);
     void setStatusText(std::wstring text);
+    void setSecondaryStatusText(std::wstring text);
 
     float preferredHeight(float) const override;
     void draw(const RenderResources& resources) override;
@@ -23,9 +24,9 @@ public:
 private:
     std::wstring title_;
     std::wstring statusText_;
+    std::wstring secondaryStatusText_;
     float sampleRate_ = 0.0f;
     bool audioOnline_ = false;
 };
 
 }  // namespace winui
-
