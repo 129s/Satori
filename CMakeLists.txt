@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if (MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 set(SATORI_FONTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/Fonts")
 if (NOT EXISTS "${SATORI_FONTS_DIR}")
     message(FATAL_ERROR "Missing assets/Fonts directory: ${SATORI_FONTS_DIR}")

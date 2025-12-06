@@ -12,6 +12,8 @@
 #include "win/audio/SatoriRealtimeEngine.h"
 #include "win/audio/WASAPIAudioEngine.h"
 
+using Catch::Approx;
+
 namespace {
 class ScopedCOM {
 public:
