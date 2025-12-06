@@ -22,6 +22,7 @@ struct AppConfig {
     double sampleRate = 44100.0;
     float decay = 0.996f;
     float brightness = 0.5f;
+    float dispersionAmount = 0.12f;
     float pickPosition = 0.5f;
     bool enableLowpass = true;
     synthesis::NoiseType noiseType = synthesis::NoiseType::White;
@@ -33,7 +34,7 @@ struct AppConfig {
 void printUsage() {
     std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
-                 "[--pickpos 0.5] [--noise white|binary] [--filter lowpass|none] "
+                 "[--dispersion 0.12] [--pickpos 0.5] [--noise white|binary] [--filter lowpass|none] "
                  "[--release 0.35] [--seed 1234] [--output out.wav]\n";
 }
 
@@ -120,9 +121,17 @@ float defaultAmpRelease() {
     return 0.35f;
 }
 
+float defaultDispersionAmount() {
+    if (const auto* info = engine::GetParamInfo(engine::ParamId::DispersionAmount)) {
+        return info->defaultValue;
+    }
+    return 0.12f;
+}
+
 AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     AppConfig config;
     config.ampRelease = defaultAmpRelease();
+    config.dispersionAmount = defaultDispersionAmount();
     showHelp = false;
 
     std::unordered_map<std::string, std::string> kv;
@@ -154,6 +163,9 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     }
     if (auto it = kv.find("brightness"); it != kv.end()) {
         parseFloat(it->second, config.brightness);
+    }
+    if (auto it = kv.find("dispersion"); it != kv.end()) {
+        parseFloat(it->second, config.dispersionAmount);
     }
     if (auto it = kv.find("pickpos"); it != kv.end()) {
         parseFloat(it->second, config.pickPosition);
@@ -270,6 +282,7 @@ int main(int argc, char** argv) {
     synthEngine.setSampleRate(appConfig.sampleRate);
     synthEngine.setParam(engine::ParamId::Decay, appConfig.decay);
     synthEngine.setParam(engine::ParamId::Brightness, appConfig.brightness);
+    synthEngine.setParam(engine::ParamId::DispersionAmount, appConfig.dispersionAmount);
     synthEngine.setParam(engine::ParamId::PickPosition, appConfig.pickPosition);
     synthEngine.setParam(engine::ParamId::EnableLowpass, appConfig.enableLowpass ? 1.0f : 0.0f);
     synthEngine.setParam(engine::ParamId::NoiseType,

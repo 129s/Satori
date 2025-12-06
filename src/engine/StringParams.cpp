@@ -21,6 +21,8 @@ const std::vector<ParamInfo>& GetParamInfoList() {
     static const std::vector<ParamInfo> kParams = {
         {ParamId::Decay, "decay", ParamType::Float, 0.90f, 0.999f, 0.996f},
         {ParamId::Brightness, "brightness", ParamType::Float, 0.0f, 1.0f, 0.5f},
+        {ParamId::DispersionAmount, "dispersionAmount", ParamType::Float, 0.0f, 1.0f,
+         0.12f},
         {ParamId::PickPosition, "pickPosition", ParamType::Float, 0.05f, 0.95f, 0.5f},
         {ParamId::EnableLowpass, "enableLowpass", ParamType::Bool, 0.0f, 1.0f, 1.0f},
         {ParamId::NoiseType, "noiseType", ParamType::Enum, 0.0f, 1.0f, 0.0f},

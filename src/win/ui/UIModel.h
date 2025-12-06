@@ -34,7 +34,10 @@ struct KeyboardConfig {
 struct FlowDiagramState {
     float decay = 0.0f;
     float brightness = 0.0f;
+    float dispersionAmount = 0.0f;
     float pickPosition = 0.0f;
+    float bodyTone = 0.0f;
+    float roomAmount = 0.0f;
     int noiseType = 0;  // 0 = White, 1 = Binary（或项目内部约定）
 };
 

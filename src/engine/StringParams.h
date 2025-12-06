@@ -8,6 +8,7 @@ namespace engine {
 enum class ParamId {
     Decay,
     Brightness,
+    DispersionAmount,
     PickPosition,
     EnableLowpass,
     NoiseType,

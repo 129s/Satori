@@ -17,6 +17,7 @@ struct StringConfig {
     float decay = 0.996f;        // 基础能量衰减
     float brightness = 0.5f;     // 控制低通滤波强度
     float pickPosition = 0.5f;   // 0-1 之间
+    float dispersionAmount = 0.12f;  // 频散强度，0 表示关闭
     NoiseType noiseType = NoiseType::White;
     bool enableLowpass = true;
     unsigned int seed = 0;  // 随机噪声种子，0 表示使用 random_device
@@ -47,6 +48,7 @@ private:
     void fillExcitationNoise();
     void applyPickPositionShape();
     void configureFilters();
+    std::vector<float> dispersionCoefficients() const;
 
     StringConfig config_;
     std::vector<float> delayBuffer_;
@@ -57,6 +59,7 @@ private:
     float lastOutput_ = 0.0f;
     unsigned int rngSeed_;
     std::unique_ptr<dsp::FilterChain> filterChain_;
+    double currentFrequency_ = 440.0;
 };
 
 }  // namespace synthesis

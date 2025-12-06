@@ -312,6 +312,8 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::Decay, static_cast<float>(config.decay), config_,
                        masterGain_);
     applyParamUnlocked(ParamId::Brightness, config.brightness, config_, masterGain_);
+    applyParamUnlocked(ParamId::DispersionAmount, config.dispersionAmount, config_,
+                       masterGain_);
     applyParamUnlocked(ParamId::PickPosition, config.pickPosition, config_, masterGain_);
     applyParamUnlocked(ParamId::EnableLowpass, config.enableLowpass ? 1.0f : 0.0f,
                        config_, masterGain_);
@@ -408,6 +410,8 @@ float StringSynthEngine::getParam(ParamId id) const {
             return static_cast<float>(config_.decay);
         case ParamId::Brightness:
             return config_.brightness;
+        case ParamId::DispersionAmount:
+            return config_.dispersionAmount;
         case ParamId::PickPosition:
             return config_.pickPosition;
         case ParamId::EnableLowpass:
@@ -563,6 +567,9 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
             break;
         case ParamId::Brightness:
             config.brightness = clamped;
+            break;
+        case ParamId::DispersionAmount:
+            config.dispersionAmount = clamped;
             break;
         case ParamId::PickPosition:
             config.pickPosition = clamped;

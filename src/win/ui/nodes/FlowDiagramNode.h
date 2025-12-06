@@ -6,7 +6,7 @@
 
 namespace winui {
 
-// 合成流程图节点：展示 Excitation → String → Filter → Output 的信号流。
+// 合成流程图节点：展示 Excitation → String Loop → Body → Room 的信号流。
 class FlowDiagramNode : public UILayoutNode {
 public:
     FlowDiagramNode();
@@ -34,18 +34,18 @@ private:
                     IDWriteTextFormat* textFormat,
                     const D2D1_RECT_F& rect);
 
-    void drawFilter(ID2D1HwndRenderTarget* target,
-                    ID2D1SolidColorBrush* gridBrush,
-                    ID2D1SolidColorBrush* accentBrush,
-                    IDWriteTextFormat* textFormat,
-                    const D2D1_RECT_F& rect);
+    void drawBody(ID2D1HwndRenderTarget* target,
+                  ID2D1SolidColorBrush* gridBrush,
+                  ID2D1SolidColorBrush* accentBrush,
+                  IDWriteTextFormat* textFormat,
+                  const D2D1_RECT_F& rect);
 
-    void drawOutput(ID2D1HwndRenderTarget* target,
-                    ID2D1SolidColorBrush* panelBrush,
-                    ID2D1SolidColorBrush* gridBrush,
-                    ID2D1SolidColorBrush* accentBrush,
-                    IDWriteTextFormat* textFormat,
-                    const D2D1_RECT_F& rect);
+    void drawRoom(ID2D1HwndRenderTarget* target,
+                  ID2D1SolidColorBrush* panelBrush,
+                  ID2D1SolidColorBrush* gridBrush,
+                  ID2D1SolidColorBrush* accentBrush,
+                  IDWriteTextFormat* textFormat,
+                  const D2D1_RECT_F& rect);
 };
 
 }  // namespace winui

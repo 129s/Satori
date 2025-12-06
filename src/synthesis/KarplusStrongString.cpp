@@ -107,7 +107,11 @@ void KarplusStrongString::applyPickPositionShape() {
 }
 
 void KarplusStrongString::configureFilters() {
-    if (!config_.enableLowpass) {
+    const auto dispersion = dispersionCoefficients();
+    const bool needDispersion = !dispersion.empty();
+    const bool needLowpass = config_.enableLowpass;
+
+    if (!needDispersion && !needLowpass) {
         filterChain_.reset();
         return;
     }
@@ -118,8 +122,16 @@ void KarplusStrongString::configureFilters() {
         filterChain_->clear();
     }
 
-    auto lowpass = std::make_unique<dsp::OnePoleLowPass>(clamp01(config_.brightness));
-    filterChain_->addFilter(std::move(lowpass));
+    if (needDispersion) {
+        for (float coeff : dispersion) {
+            auto ap = std::make_unique<dsp::FirstOrderAllPass>(coeff);
+            filterChain_->addFilter(std::move(ap));
+        }
+    }
+    if (needLowpass) {
+        auto lowpass = std::make_unique<dsp::OnePoleLowPass>(clamp01(config_.brightness));
+        filterChain_->addFilter(std::move(lowpass));
+    }
 }
 
 void KarplusStrongString::start(double frequency) {
@@ -128,6 +140,7 @@ void KarplusStrongString::start(double frequency) {
         return;
     }
 
+    currentFrequency_ = frequency;
     configureFilters();
 
     const auto period = static_cast<std::size_t>(
@@ -164,6 +177,20 @@ float KarplusStrongString::processSample() {
     readIndex_ = (readIndex_ + 1) % delayBuffer_.size();
     lastOutput_ = current;
     return lastOutput_;
+}
+
+std::vector<float> KarplusStrongString::dispersionCoefficients() const {
+    const float amount = clamp01(config_.dispersionAmount);
+    if (amount <= 0.0001f || config_.sampleRate <= 0.0) {
+        return {};
+    }
+    const double nyquist = config_.sampleRate * 0.5;
+    const double freq = std::clamp(currentFrequency_, 10.0, nyquist);
+    const float normFreq = static_cast<float>(freq / nyquist);
+    const float scaled = amount * 0.7f;
+    const float coeff1 = std::clamp(scaled * (0.35f + 0.65f * normFreq), -0.85f, 0.85f);
+    const float coeff2 = std::clamp(scaled * 0.6f * (0.4f + 0.6f * normFreq), -0.8f, 0.8f);
+    return {coeff1, coeff2};
 }
 
 }  // namespace synthesis

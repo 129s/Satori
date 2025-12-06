@@ -99,6 +99,46 @@ TEST_CASE("KarplusStrongSynth 可混合多音并归一化", "[ks-synth]") {
     REQUIRE(maxSample <= Catch::Approx(1.0f).epsilon(0.001f));
 }
 
+TEST_CASE("String Loop 频散模块在极端参数下保持稳定", "[ks-string][dispersion]") {
+    auto renderWithConfig = [](const synthesis::StringConfig& cfg, double freq,
+                               std::size_t frames) {
+        synthesis::KarplusStrongString string(cfg);
+        string.start(freq);
+        std::vector<float> buffer;
+        buffer.reserve(frames);
+        for (std::size_t i = 0; i < frames; ++i) {
+            buffer.push_back(string.processSample());
+        }
+        REQUIRE(std::all_of(buffer.begin(), buffer.end(),
+                            [](float v) { return std::isfinite(v); }));
+        return buffer;
+    };
+
+    synthesis::StringConfig hotConfig;
+    hotConfig.sampleRate = 48000.0;
+    hotConfig.decay = 0.999f;
+    hotConfig.brightness = 1.0f;
+    hotConfig.dispersionAmount = 1.0f;
+    hotConfig.pickPosition = 0.35f;
+    hotConfig.seed = 123u;
+
+    auto highBuffer = renderWithConfig(hotConfig, 1975.0, 4096);
+    const float highPeak = maxAbs(highBuffer);
+    INFO("highPeak=" << highPeak);
+    REQUIRE(highPeak > 0.001f);
+    REQUIRE(highPeak < 3.0f);
+
+    synthesis::StringConfig dampedConfig = hotConfig;
+    dampedConfig.decay = 0.92f;
+    dampedConfig.brightness = 0.2f;
+    dampedConfig.dispersionAmount = 0.85f;
+    auto lowBuffer = renderWithConfig(dampedConfig, 82.41, 4096);
+    const float lowPeak = maxAbs(lowBuffer);
+    INFO("lowPeak=" << lowPeak);
+    REQUIRE(lowPeak > 0.0005f);
+    REQUIRE(lowPeak < 2.5f);
+}
+
 TEST_CASE("StringSynthEngine NoteOn/Off 控制尾音长度", "[engine-core]") {
     const double sampleRate = 48000.0;
     engine::StringSynthEngine engine;

@@ -25,6 +25,19 @@ private:
     float state_;
 };
 
+class FirstOrderAllPass : public Filter {
+public:
+    explicit FirstOrderAllPass(float coefficient = 0.0f);
+
+    void setCoefficient(float coefficient);
+    float process(float input) override;
+    void reset() override;
+
+private:
+    float coefficient_;
+    float z1_;
+};
+
 class FilterChain {
 public:
     void addFilter(std::unique_ptr<Filter> filter);

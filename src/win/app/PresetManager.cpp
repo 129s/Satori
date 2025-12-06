@@ -146,6 +146,14 @@ bool PresetManager::parse(const std::string& content,
         }
         params.setParam(engine::ParamId::Brightness, value);
     }
+    if (auto dispersion = ExtractValue(content, "dispersionAmount")) {
+        const float value = ParseFloat(*dispersion, ok);
+        if (!ok) {
+            errorMessage = L"解析 dispersionAmount 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::DispersionAmount, value);
+    }
     if (auto pickPos = ExtractValue(content, "pickPosition")) {
         const float value = ParseFloat(*pickPos, ok);
         if (!ok) {
@@ -200,6 +208,7 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
     oss << "{\n"
         << "  \"decay\": " << config.decay << ",\n"
         << "  \"brightness\": " << config.brightness << ",\n"
+        << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
         << "  \"pickPosition\": " << config.pickPosition << ",\n"
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")
