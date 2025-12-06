@@ -183,6 +183,44 @@ TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
             Catch::Approx(rms(warm, toFrames(0.05), toFrames(0.2))));
 }
 
+TEST_CASE("Room 模块提供可控的立体扩展", "[engine-room]") {
+    const double sampleRate = 48000.0;
+    engine::StringSynthEngine engine;
+    engine.setSampleRate(sampleRate);
+    engine.setParam(engine::ParamId::RoomAmount, 0.8f);
+
+    auto toFrames = [sampleRate](double seconds) {
+        return static_cast<std::uint64_t>(
+            std::max(0.0, std::round(seconds * sampleRate)));
+    };
+
+    engine::Event on{};
+    on.type = engine::EventType::NoteOn;
+    on.noteId = 1;
+    on.frequency = 330.0;
+    on.velocity = 0.7f;
+    on.frameOffset = 0;
+
+    engine::Event off{};
+    off.type = engine::EventType::NoteOff;
+    off.noteId = 1;
+    off.frameOffset = toFrames(0.2);
+
+    const std::size_t totalFrames = static_cast<std::size_t>(sampleRate * 0.5);
+    auto buffer = renderEngineSequence(engine, {on, off}, totalFrames, 2);
+
+    REQUIRE(std::all_of(buffer.begin(), buffer.end(),
+                        [](float v) { return std::isfinite(v); }));
+    const float leftPeak = maxAbs(buffer);
+    float rightPeak = 0.0f;
+    for (std::size_t i = 1; i < buffer.size(); i += 2) {
+        rightPeak = std::max(rightPeak, std::abs(buffer[i]));
+    }
+    REQUIRE(leftPeak > 0.001f);
+    REQUIRE(rightPeak > 0.001f);
+    REQUIRE(std::abs(leftPeak - rightPeak) > 1e-4f);
+}
+
 TEST_CASE("StringSynthEngine NoteOn/Off 控制尾音长度", "[engine-core]") {
     const double sampleRate = 48000.0;
     engine::StringSynthEngine engine;

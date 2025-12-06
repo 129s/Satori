@@ -28,6 +28,7 @@ struct AppConfig {
     float pickPosition = 0.5f;
     float bodyTone = 0.5f;
     float bodySize = 0.5f;
+    float roomAmount = 0.0f;
     bool enableLowpass = true;
     synthesis::NoiseType noiseType = synthesis::NoiseType::White;
     unsigned int seed = 0;
@@ -39,7 +40,7 @@ void printUsage() {
     std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
                  "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--pickpos 0.5] "
-                 "[--bodyTone 0.5] [--bodySize 0.5] [--noise white|binary] [--filter lowpass|none] "
+                 "[--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] [--noise white|binary] [--filter lowpass|none] "
                  "[--release 0.35] [--seed 1234] [--output out.wav]\n";
 }
 
@@ -148,6 +149,7 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     config.excitationVelocity = defaultValue(engine::ParamId::ExcitationVelocity, 0.5f);
     config.bodyTone = defaultValue(engine::ParamId::BodyTone, 0.5f);
     config.bodySize = defaultValue(engine::ParamId::BodySize, 0.5f);
+    config.roomAmount = defaultValue(engine::ParamId::RoomAmount, 0.0f);
     showHelp = false;
 
     std::unordered_map<std::string, std::string> kv;
@@ -197,6 +199,9 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     }
     if (auto it = kv.find("bodySize"); it != kv.end()) {
         parseFloat(it->second, config.bodySize);
+    }
+    if (auto it = kv.find("room"); it != kv.end()) {
+        parseFloat(it->second, config.roomAmount);
     }
     if (auto it = kv.find("noise"); it != kv.end()) {
         parseNoise(it->second, config.noiseType);
@@ -317,6 +322,7 @@ int main(int argc, char** argv) {
     synthEngine.setParam(engine::ParamId::PickPosition, appConfig.pickPosition);
     synthEngine.setParam(engine::ParamId::BodyTone, appConfig.bodyTone);
     synthEngine.setParam(engine::ParamId::BodySize, appConfig.bodySize);
+    synthEngine.setParam(engine::ParamId::RoomAmount, appConfig.roomAmount);
     synthEngine.setParam(engine::ParamId::EnableLowpass, appConfig.enableLowpass ? 1.0f : 0.0f);
     synthEngine.setParam(engine::ParamId::NoiseType,
                          appConfig.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f);

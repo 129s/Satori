@@ -29,6 +29,7 @@ const std::vector<ParamInfo>& GetParamInfoList() {
          0.5f},
         {ParamId::BodyTone, "bodyTone", ParamType::Float, 0.0f, 1.0f, 0.5f},
         {ParamId::BodySize, "bodySize", ParamType::Float, 0.0f, 1.0f, 0.5f},
+        {ParamId::RoomAmount, "roomAmount", ParamType::Float, 0.0f, 1.0f, 0.0f},
         {ParamId::PickPosition, "pickPosition", ParamType::Float, 0.05f, 0.95f, 0.5f},
         {ParamId::EnableLowpass, "enableLowpass", ParamType::Bool, 0.0f, 1.0f, 1.0f},
         {ParamId::NoiseType, "noiseType", ParamType::Enum, 0.0f, 1.0f, 0.0f},

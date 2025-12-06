@@ -54,6 +54,111 @@ private:
     float highGain_ = 1.0f;
 };
 
+class ExpressiveMapping {
+public:
+    static float Apply(float velocity, double frequency,
+                       const synthesis::StringConfig& base,
+                       synthesis::StringConfig& out) {
+        out = base;
+        const float v = std::clamp(velocity, 0.0f, 1.0f);
+        const double refFreq = 440.0;
+        const double ratio = (frequency > 0.0) ? (frequency / refFreq) : 1.0;
+        const float keyTrack =
+            static_cast<float>(std::clamp(std::log2(ratio), -3.0, 3.0));
+
+        const float amp = 0.45f + 0.65f * v;
+
+        auto clampParam = [](ParamId id, float value) {
+            if (const auto* info = GetParamInfo(id)) {
+                return ClampToRange(*info, value);
+            }
+            return value;
+        };
+
+        const float brightnessDelta = 0.28f * (v - 0.5f) + 0.12f * keyTrack;
+        out.brightness =
+            clampParam(ParamId::Brightness, out.brightness + brightnessDelta);
+
+        const float decayDelta = -0.022f * (v - 0.5f) - 0.012f * keyTrack;
+        out.decay = clampParam(ParamId::Decay, out.decay + decayDelta);
+
+        return amp;
+    }
+};
+
+class RoomProcessor {
+public:
+    void setSampleRate(double sampleRate) {
+        if (sampleRate <= 0.0) {
+            return;
+        }
+        sampleRate_ = sampleRate;
+        refreshDelay();
+    }
+
+    void setAmount(float amount) {
+        amount_ = std::clamp(amount, 0.0f, 1.0f);
+        refreshGains();
+    }
+
+    void reset() {
+        std::fill(delayBuffer_.begin(), delayBuffer_.end(), 0.0f);
+        writeIndex_ = 0;
+        lpState_ = 0.0f;
+    }
+
+    void process(float input, float& outL, float& outR) {
+        if (delayBuffer_.empty() || amount_ <= 0.0001f) {
+            outL = outR = input;
+            return;
+        }
+        delayBuffer_[writeIndex_] = input;
+        const std::size_t size = delayBuffer_.size();
+        const float tapShort =
+            delayBuffer_[(writeIndex_ + size - shortDelay_) % size];
+        const float tapLong =
+            delayBuffer_[(writeIndex_ + size - longDelay_) % size];
+        writeIndex_ = (writeIndex_ + 1) % size;
+
+        lpState_ = dampCoeff_ * tapLong + (1.0f - dampCoeff_) * lpState_;
+        const float wetL = 0.6f * tapShort + 0.4f * lpState_;
+        const float wetR = 0.4f * tapShort + 0.6f * lpState_;
+
+        outL = dryGain_ * input + wetGain_ * wetL;
+        outR = dryGain_ * input + wetGain_ * wetR;
+    }
+
+private:
+    void refreshDelay() {
+        const std::size_t maxDelay = static_cast<std::size_t>(
+            std::max(8.0, std::ceil(sampleRate_ * 0.003)));
+        delayBuffer_.assign(maxDelay, 0.0f);
+        shortDelay_ = static_cast<std::size_t>(
+            std::max(1.0, std::round(sampleRate_ * 0.0012)));
+        longDelay_ = static_cast<std::size_t>(
+            std::max(1.0, std::round(sampleRate_ * 0.0019)));
+        writeIndex_ = 0;
+        lpState_ = 0.0f;
+    }
+
+    void refreshGains() {
+        wetGain_ = 0.3f + 0.7f * amount_;
+        dryGain_ = 1.0f - 0.5f * amount_;
+        dampCoeff_ = 0.25f + 0.35f * amount_;
+    }
+
+    std::vector<float> delayBuffer_;
+    std::size_t writeIndex_ = 0;
+    std::size_t shortDelay_ = 1;
+    std::size_t longDelay_ = 2;
+    double sampleRate_ = 44100.0;
+    float amount_ = 0.0f;
+    float wetGain_ = 0.3f;
+    float dryGain_ = 1.0f;
+    float dampCoeff_ = 0.4f;
+    float lpState_ = 0.0f;
+};
+
 namespace {
 
 constexpr float kVoiceSilenceThreshold = 1e-5f;
@@ -243,6 +348,7 @@ public:
         voice->energy = 0.0f;
 
         synthesis::StringConfig voiceConfig = config;
+        const float amp = ExpressiveMapping::Apply(velocity, frequency, config, voiceConfig);
         voiceConfig.sampleRate = sampleRate_;
         voice->string.updateConfig(voiceConfig);
         voice->string.start(frequency, velocity);
@@ -250,7 +356,7 @@ public:
         voice->envelope.setSampleRate(sampleRate_);
         voice->envelope.setAttackSeconds(attackSeconds_);
         voice->envelope.setReleaseSeconds(releaseSeconds_);
-        voice->envelope.noteOn(velocity);
+        voice->envelope.noteOn(amp);
     }
 
     void noteOff(int noteId) {
@@ -351,6 +457,9 @@ StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
     bodyFilter_ = std::make_unique<BodyFilter>();
     bodyFilter_->setSampleRate(config_.sampleRate);
     bodyFilter_->setParams(config_.bodyTone, config_.bodySize);
+    roomProcessor_ = std::make_unique<RoomProcessor>();
+    roomProcessor_->setSampleRate(config_.sampleRate);
+    roomProcessor_->setAmount(config_.roomAmount);
 }
 
 StringSynthEngine::~StringSynthEngine() = default;
@@ -370,6 +479,7 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
                        masterGain_);
     applyParamUnlocked(ParamId::BodyTone, config.bodyTone, config_, masterGain_);
     applyParamUnlocked(ParamId::BodySize, config.bodySize, config_, masterGain_);
+    applyParamUnlocked(ParamId::RoomAmount, config.roomAmount, config_, masterGain_);
     applyParamUnlocked(ParamId::PickPosition, config.pickPosition, config_, masterGain_);
     applyParamUnlocked(ParamId::EnableLowpass, config.enableLowpass ? 1.0f : 0.0f,
                        config_, masterGain_);
@@ -379,6 +489,9 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     voiceManager_->setSampleRate(config_.sampleRate);
     if (bodyFilter_) {
         bodyFilter_->setSampleRate(config_.sampleRate);
+    }
+    if (roomProcessor_) {
+        roomProcessor_->setSampleRate(config_.sampleRate);
     }
 }
 
@@ -393,6 +506,9 @@ void StringSynthEngine::setSampleRate(double sampleRate) {
     voiceManager_->setSampleRate(config_.sampleRate);
     if (bodyFilter_) {
         bodyFilter_->setSampleRate(config_.sampleRate);
+    }
+    if (roomProcessor_) {
+        roomProcessor_->setSampleRate(config_.sampleRate);
     }
 }
 
@@ -482,6 +598,8 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.bodyTone;
         case ParamId::BodySize:
             return config_.bodySize;
+        case ParamId::RoomAmount:
+            return config_.roomAmount;
         case ParamId::PickPosition:
             return config_.pickPosition;
         case ParamId::EnableLowpass:
@@ -557,8 +675,19 @@ void StringSynthEngine::process(const ProcessBlock& block) {
         if (bodyFilter_) {
             sample = bodyFilter_->process(sample);
         }
-        for (uint16_t ch = 0; ch < block.channels; ++ch) {
-            block.output[frame * block.channels + ch] += sample;
+        float left = sample;
+        float right = sample;
+        if (roomProcessor_) {
+            roomProcessor_->process(sample, left, right);
+        }
+        if (block.channels >= 2) {
+            block.output[frame * block.channels] += left;
+            block.output[frame * block.channels + 1] += right;
+            for (uint16_t ch = 2; ch < block.channels; ++ch) {
+                block.output[frame * block.channels + ch] += sample;
+            }
+        } else if (block.channels == 1) {
+            block.output[frame] += 0.5f * (left + right);
         }
     }
 
@@ -660,6 +789,12 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
             config.bodySize = clamped;
             if (bodyFilter_) {
                 bodyFilter_->setParams(config.bodyTone, config.bodySize);
+            }
+            break;
+        case ParamId::RoomAmount:
+            config.roomAmount = clamped;
+            if (roomProcessor_) {
+                roomProcessor_->setAmount(config.roomAmount);
             }
             break;
         case ParamId::PickPosition:

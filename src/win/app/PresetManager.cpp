@@ -178,6 +178,14 @@ bool PresetManager::parse(const std::string& content,
         }
         params.setParam(engine::ParamId::BodySize, value);
     }
+    if (auto room = ExtractValue(content, "roomAmount")) {
+        const float value = ParseFloat(*room, ok);
+        if (!ok) {
+            errorMessage = L"解析 roomAmount 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::RoomAmount, value);
+    }
     if (auto dispersion = ExtractValue(content, "dispersionAmount")) {
         const float value = ParseFloat(*dispersion, ok);
         if (!ok) {
@@ -245,6 +253,7 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
         << "  \"bodyTone\": " << config.bodyTone << ",\n"
         << "  \"bodySize\": " << config.bodySize << ",\n"
+        << "  \"roomAmount\": " << config.roomAmount << ",\n"
         << "  \"pickPosition\": " << config.pickPosition << ",\n"
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")

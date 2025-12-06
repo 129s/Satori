@@ -22,6 +22,7 @@ struct StringConfig {
     float dispersionAmount = 0.12f;  // 频散强度，0 表示关闭
     float bodyTone = 0.5f;       // 全局 Body 着色
     float bodySize = 0.5f;       // 全局 Body 尺度
+    float roomAmount = 0.0f;     // Room/Wet 强度
     NoiseType noiseType = NoiseType::White;
     bool enableLowpass = true;
     unsigned int seed = 0;  // 随机噪声种子，0 表示使用 random_device

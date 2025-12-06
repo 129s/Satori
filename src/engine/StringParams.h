@@ -13,6 +13,7 @@ enum class ParamId {
     ExcitationVelocity,
     BodyTone,
     BodySize,
+    RoomAmount,
     PickPosition,
     EnableLowpass,
     NoiseType,

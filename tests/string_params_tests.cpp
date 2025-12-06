@@ -23,6 +23,10 @@ TEST_CASE("参数名称查找大小写不敏感", "[engine-params]") {
     const auto* bodyTone = engine::FindParamByName("BODYTONE");
     REQUIRE(bodyTone != nullptr);
     REQUIRE(bodyTone->id == engine::ParamId::BodyTone);
+
+    const auto* room = engine::FindParamByName("roomAmount");
+    REQUIRE(room != nullptr);
+    REQUIRE(room->id == engine::ParamId::RoomAmount);
 }
 
 TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]") {
@@ -35,6 +39,7 @@ TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]")
     synth.setParam(engine::ParamId::ExcitationVelocity, -1.0f);
     synth.setParam(engine::ParamId::BodyTone, 2.0f);
     synth.setParam(engine::ParamId::BodySize, -2.0f);
+    synth.setParam(engine::ParamId::RoomAmount, 5.0f);
     synth.setParam(engine::ParamId::PickPosition, 0.0f);
     synth.setParam(engine::ParamId::EnableLowpass, 0.0f);
     synth.setParam(engine::ParamId::NoiseType, 1.0f);
@@ -52,6 +57,7 @@ TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]")
         engine::GetParamInfo(engine::ParamId::ExcitationVelocity);
     const auto* bodyToneInfo = engine::GetParamInfo(engine::ParamId::BodyTone);
     const auto* bodySizeInfo = engine::GetParamInfo(engine::ParamId::BodySize);
+    const auto* roomInfo = engine::GetParamInfo(engine::ParamId::RoomAmount);
     const auto* pickInfo = engine::GetParamInfo(engine::ParamId::PickPosition);
     const auto* gainInfo = engine::GetParamInfo(engine::ParamId::MasterGain);
 
@@ -62,6 +68,7 @@ TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]")
     REQUIRE(config.excitationVelocity == Catch::Approx(exciteVelInfo->minValue));
     REQUIRE(config.bodyTone == Catch::Approx(bodyToneInfo->maxValue));
     REQUIRE(config.bodySize == Catch::Approx(bodySizeInfo->minValue));
+    REQUIRE(config.roomAmount == Catch::Approx(roomInfo->maxValue));
     REQUIRE(config.pickPosition == Catch::Approx(pickInfo->minValue));
     REQUIRE(config.enableLowpass == false);
     REQUIRE(config.noiseType == synthesis::NoiseType::Binary);
