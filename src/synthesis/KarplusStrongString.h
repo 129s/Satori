@@ -26,8 +26,20 @@ class KarplusStrongString {
 public:
     explicit KarplusStrongString(StringConfig config = {});
     ~KarplusStrongString();
+    KarplusStrongString(const KarplusStrongString&) = delete;
+    KarplusStrongString& operator=(const KarplusStrongString&) = delete;
+    KarplusStrongString(KarplusStrongString&&) noexcept;
+    KarplusStrongString& operator=(KarplusStrongString&&) noexcept;
 
+    // 预渲染整段样本（离线用途）
     std::vector<float> pluck(double frequency, double durationSeconds);
+    // 启动持续性的弦震动，用于实时 voice 播放
+    void start(double frequency);
+    // 拉取单个样本；未启动时返回 0
+    float processSample();
+    bool active() const { return active_; }
+    float lastOutput() const { return lastOutput_; }
+
     const StringConfig& config() const { return config_; }
     void updateConfig(const StringConfig& config) { config_ = config; configureFilters(); }
 
@@ -39,6 +51,10 @@ private:
     StringConfig config_;
     std::vector<float> delayBuffer_;
     std::vector<float> outputBuffer_;
+    std::size_t readIndex_ = 0;
+    float decayFactor_ = 1.0f;
+    bool active_ = false;
+    float lastOutput_ = 0.0f;
     unsigned int rngSeed_;
     std::unique_ptr<dsp::FilterChain> filterChain_;
 };

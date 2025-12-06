@@ -16,7 +16,7 @@ public:
     KeyboardNode();
 
     void setConfig(const KeyboardConfig& config,
-                   std::function<void(double)> callback);
+                   std::function<void(int, double, bool)> callback);
     void setColors(const KeyboardColors& colors);
     bool pressKeyByMidi(int midiNote);
     void releaseKeyByMidi(int midiNote);

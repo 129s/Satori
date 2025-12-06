@@ -7,7 +7,7 @@ namespace winui {
 KeyboardNode::KeyboardNode() = default;
 
 void KeyboardNode::setConfig(const KeyboardConfig& config,
-                             std::function<void(double)> callback) {
+                             std::function<void(int, double, bool)> callback) {
     keyboard_.setCallback(std::move(callback));
     keyboard_.setShowLabels(config.showLabels);
     keyboard_.setHoverOutline(config.hoverOutline);

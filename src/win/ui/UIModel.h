@@ -44,7 +44,7 @@ struct UIModel {
     std::vector<ButtonDescriptor> buttons;
     std::vector<SliderDescriptor> sliders;
     KeyboardConfig keyboardConfig;
-    std::function<void(double)> keyCallback;
+    std::function<void(int, double, bool)> keyCallback;
     std::vector<float> waveformSamples;
     bool audioOnline = false;
     float sampleRate = 0.0f;

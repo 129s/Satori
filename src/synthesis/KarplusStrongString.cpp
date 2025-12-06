@@ -29,6 +29,10 @@ KarplusStrongString::KarplusStrongString(StringConfig config)
 
 KarplusStrongString::~KarplusStrongString() = default;
 
+KarplusStrongString::KarplusStrongString(KarplusStrongString&&) noexcept = default;
+KarplusStrongString& KarplusStrongString::operator=(
+    KarplusStrongString&&) noexcept = default;
+
 std::vector<float> KarplusStrongString::pluck(double frequency,
                                               double durationSeconds) {
     if (frequency <= 0.0 || durationSeconds <= 0.0 ||
@@ -42,34 +46,18 @@ std::vector<float> KarplusStrongString::pluck(double frequency,
         return {};
     }
 
-    auto period = static_cast<std::size_t>(
-        std::max(2.0, std::round(config_.sampleRate / frequency)));
-    delayBuffer_.assign(period, 0.0f);
-
-    fillExcitationNoise();
-    applyPickPositionShape();
+    start(frequency);
+    if (!active_) {
+        return {};
+    }
 
     outputBuffer_.assign(totalSamples, 0.0f);
-    const float decay = clamp01(config_.decay);
-    std::size_t readIndex = 0;
-    if (filterChain_) {
-        filterChain_->reset();
-    }
-
     for (std::size_t i = 0; i < totalSamples; ++i) {
-        const float current = delayBuffer_[readIndex];
-        const float next = delayBuffer_[(readIndex + 1) % delayBuffer_.size()];
-        const float averaged = 0.5f * (current + next);
-        float filtered = averaged;
-        if (filterChain_ && !filterChain_->empty()) {
-            filtered = filterChain_->process(averaged);
-        }
-        delayBuffer_[readIndex] = decay * filtered;
-
-        outputBuffer_[i] = current;
-        readIndex = (readIndex + 1) % delayBuffer_.size();
+        outputBuffer_[i] = processSample();
     }
 
+    active_ = false;
+    lastOutput_ = 0.0f;
     return outputBuffer_;
 }
 
@@ -132,6 +120,50 @@ void KarplusStrongString::configureFilters() {
 
     auto lowpass = std::make_unique<dsp::OnePoleLowPass>(clamp01(config_.brightness));
     filterChain_->addFilter(std::move(lowpass));
+}
+
+void KarplusStrongString::start(double frequency) {
+    if (frequency <= 0.0 || config_.sampleRate <= 0.0) {
+        active_ = false;
+        return;
+    }
+
+    configureFilters();
+
+    const auto period = static_cast<std::size_t>(
+        std::max(2.0, std::round(config_.sampleRate / frequency)));
+    delayBuffer_.assign(period, 0.0f);
+    readIndex_ = 0;
+    decayFactor_ = clamp01(config_.decay);
+    lastOutput_ = 0.0f;
+
+    fillExcitationNoise();
+    applyPickPositionShape();
+
+    if (filterChain_) {
+        filterChain_->reset();
+    }
+
+    active_ = true;
+}
+
+float KarplusStrongString::processSample() {
+    if (!active_ || delayBuffer_.empty()) {
+        return 0.0f;
+    }
+
+    const float current = delayBuffer_[readIndex_];
+    const float next = delayBuffer_[(readIndex_ + 1) % delayBuffer_.size()];
+    const float averaged = 0.5f * (current + next);
+    float filtered = averaged;
+    if (filterChain_ && !filterChain_->empty()) {
+        filtered = filterChain_->process(averaged);
+    }
+    delayBuffer_[readIndex_] = decayFactor_ * filtered;
+
+    readIndex_ = (readIndex_ + 1) % delayBuffer_.size();
+    lastOutput_ = current;
+    return lastOutput_;
 }
 
 }  // namespace synthesis

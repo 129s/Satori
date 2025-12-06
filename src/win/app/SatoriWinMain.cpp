@@ -67,7 +67,7 @@ private:
     void syncSynthConfig();
     std::vector<float> generateWaveform(double frequency);
     void refreshWaveformPreview(double frequency = 440.0);
-    void triggerFrequency(double frequency);
+    void handleVirtualKeyEvent(int midiNote, double frequency, bool pressed);
     void initializeKeyBindings();
     void initializePresetSupport();
     void handleLoadPreset();
@@ -166,7 +166,9 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.keyboardConfig.octaveCount = kKeyboardOctaveCount;
     model.keyboardConfig.showLabels = false;
     model.keyboardConfig.hoverOutline = false;
-    model.keyCallback = [this](double freq) { triggerFrequency(freq); };
+    model.keyCallback = [this](int midi, double freq, bool pressed) {
+        handleVirtualKeyEvent(midi, freq, pressed);
+    };
 
     return model;
 }
@@ -242,14 +244,21 @@ void SatoriAppState::refreshWaveformPreview(double frequency) {
     }
 }
 
-void SatoriAppState::triggerFrequency(double frequency) {
+void SatoriAppState::handleVirtualKeyEvent(int midiNote, double frequency,
+                                           bool pressed) {
     if (frequency <= 0.0) {
         return;
     }
     if (engine_ && audioReady_) {
-        engine_->triggerNote(frequency, winaudio::kDefaultNoteDurationSeconds);
+        if (pressed) {
+            engine_->noteOn(midiNote, frequency);
+        } else {
+            engine_->noteOff(midiNote);
+        }
     }
-    refreshWaveformPreview(frequency);
+    if (pressed) {
+        refreshWaveformPreview(frequency);
+    }
 }
 
 void SatoriAppState::initializeKeyBindings() {
@@ -339,9 +348,6 @@ bool SatoriAppState::handleMidiKeyDown(UINT vk, LPARAM lparam) {
         if (window_) {
             InvalidateRect(window_, nullptr, FALSE);
         }
-        if (engine_ && audioReady_) {
-            engine_->noteOn(midi, MidiToFrequency(midi));
-        }
         return true;
     }
     return false;
@@ -354,9 +360,6 @@ bool SatoriAppState::handleMidiKeyUp(UINT vk) {
     }
     if (d2d_) {
         d2d_->releaseKeyboardKey(it->second);
-    }
-    if (engine_ && audioReady_) {
-        engine_->noteOff(it->second);
     }
     activeVirtualKeys_.erase(it);
     if (window_) {

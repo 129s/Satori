@@ -150,9 +150,7 @@ bool VirtualKeyboard::onPointerMove(float x, float y) {
     if (dragging_) {
         Key* key = hitTest(x, y);
         if (key && key != activeKey_) {
-            if (activeKey_) {
-                activeKey_->pressed = false;
-            }
+            releaseKey(activeKey_);
             activeKey_ = key;
             triggerKey(key);
         }
@@ -175,7 +173,7 @@ bool VirtualKeyboard::onPointerMove(float x, float y) {
 void VirtualKeyboard::onPointerUp() {
     dragging_ = false;
     if (activeKey_) {
-        activeKey_->pressed = false;
+        releaseKey(activeKey_);
         activeKey_ = nullptr;
     }
     updateHoveredKey(nullptr);
@@ -190,9 +188,6 @@ bool VirtualKeyboard::pressKeyByMidi(int midiNote) {
         return false;
     }
     Key& key = keys_[it->second];
-    if (key.pressed) {
-        return true;
-    }
     triggerKey(&key);
     return true;
 }
@@ -207,7 +202,9 @@ void VirtualKeyboard::releaseKeyByMidi(int midiNote) {
 
 void VirtualKeyboard::releaseAllKeys() {
     for (auto& key : keys_) {
-        key.pressed = false;
+        if (key.pressed) {
+            releaseKey(&key);
+        }
         key.hovered = false;
     }
     dragging_ = false;
@@ -361,11 +358,14 @@ void VirtualKeyboard::triggerKey(Key* key) {
     if (!key) {
         return;
     }
+    if (key->pressed) {
+        return;
+    }
     key->pressed = true;
     lastTriggeredLabel_ = key->label;
     lastTriggeredFrequency_ = key->frequency;
     if (callback_) {
-        callback_(key->frequency);
+        callback_(key->midiNote, key->frequency, true);
     }
 }
 
@@ -373,9 +373,15 @@ void VirtualKeyboard::releaseKey(Key* key) {
     if (!key) {
         return;
     }
+    if (!key->pressed) {
+        return;
+    }
     key->pressed = false;
     if (activeKey_ == key) {
         activeKey_ = nullptr;
+    }
+    if (callback_) {
+        callback_(key->midiNote, key->frequency, false);
     }
 }
 

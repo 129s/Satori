@@ -1,21 +1,314 @@
 #include "engine/StringSynthEngine.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <limits>
 
 namespace engine {
+
+namespace {
+
+constexpr float kVoiceSilenceThreshold = 1e-5f;
+constexpr float kEnergyDecay = 0.995f;
+constexpr float kEnvelopeFloor = 1e-5f;
+constexpr double kDefaultAttackSecondsValue = 0.004;
+
+class AmpEnvelope {
+public:
+    AmpEnvelope() = default;
+
+    void setSampleRate(double sampleRate) {
+        sampleRate_ = sampleRate > 0.0 ? sampleRate : sampleRate_;
+        updateAttackSamples();
+        updateReleaseSamples();
+    }
+
+    void setAttackSeconds(double seconds) {
+        attackSeconds_ = std::max(0.0, seconds);
+        updateAttackSamples();
+    }
+
+    void setReleaseSeconds(double seconds) {
+        releaseSeconds_ = std::max(0.0, seconds);
+        updateReleaseSamples();
+    }
+
+    void noteOn(float targetLevel) {
+        targetLevel_ = std::max(0.0f, targetLevel);
+        stageCursor_ = 0;
+        if (attackSamples_ == 0) {
+            level_ = targetLevel_;
+            stage_ = Stage::Sustain;
+        } else {
+            level_ = 0.0f;
+            stage_ = Stage::Attack;
+        }
+    }
+
+    void noteOff() {
+        if (stage_ == Stage::Idle) {
+            return;
+        }
+        stage_ = Stage::Release;
+        stageCursor_ = 0;
+        updateReleaseSamples();
+        releaseStartLevel_ = level_;
+        if (releaseSamples_ == 0) {
+            level_ = 0.0f;
+            stage_ = Stage::Idle;
+        }
+    }
+
+    float next() {
+        switch (stage_) {
+            case Stage::Idle:
+                level_ = 0.0f;
+                return level_;
+            case Stage::Attack: {
+                if (attackSamples_ == 0) {
+                    level_ = targetLevel_;
+                    stage_ = Stage::Sustain;
+                    return level_;
+                }
+                const float t = static_cast<float>(stageCursor_ + 1) /
+                                static_cast<float>(attackSamples_);
+                level_ = targetLevel_ * std::min(1.0f, t);
+                if (++stageCursor_ >= attackSamples_) {
+                    stage_ = Stage::Sustain;
+                    stageCursor_ = 0;
+                }
+                return level_;
+            }
+            case Stage::Sustain:
+                level_ = targetLevel_;
+                return level_;
+            case Stage::Release: {
+                if (releaseSamples_ == 0) {
+                    level_ = 0.0f;
+                    stage_ = Stage::Idle;
+                    return level_;
+                }
+                const float t = static_cast<float>(stageCursor_) /
+                                static_cast<float>(releaseSamples_);
+                const float factor = std::max(0.0f, 1.0f - t);
+                level_ = releaseStartLevel_ * factor;
+                if (++stageCursor_ >= releaseSamples_ || level_ < kEnvelopeFloor) {
+                    level_ = 0.0f;
+                    stage_ = Stage::Idle;
+                }
+                return level_;
+            }
+        }
+        return 0.0f;
+    }
+
+    bool isIdle() const { return stage_ == Stage::Idle; }
+    bool isReleasing() const { return stage_ == Stage::Release; }
+    float level() const { return level_; }
+
+private:
+    enum class Stage { Idle, Attack, Sustain, Release };
+
+    void updateAttackSamples() {
+        attackSamples_ = static_cast<std::size_t>(
+            std::max(0.0, std::round(attackSeconds_ * sampleRate_)));
+    }
+
+    void updateReleaseSamples() {
+        releaseSamples_ = static_cast<std::size_t>(
+            std::max(0.0, std::round(releaseSeconds_ * sampleRate_)));
+    }
+
+    Stage stage_ = Stage::Idle;
+    double sampleRate_ = 44100.0;
+    double attackSeconds_ = kDefaultAttackSecondsValue;
+    double releaseSeconds_ = 0.35;
+    float level_ = 0.0f;
+    float targetLevel_ = 1.0f;
+    float releaseStartLevel_ = 0.0f;
+    std::size_t stageCursor_ = 0;
+    std::size_t attackSamples_ = 0;
+    std::size_t releaseSamples_ = 0;
+};
+
+struct Voice {
+    synthesis::KarplusStrongString string;
+    AmpEnvelope envelope;
+    int noteId = -1;
+    double frequency = 0.0;
+    float velocity = 1.0f;
+    std::uint64_t age = 0;
+    float energy = 0.0f;
+};
+
+}  // namespace
+
+class StringSynthEngine::VoiceManager {
+public:
+    VoiceManager(std::size_t maxVoices, double sampleRate, double attackSeconds,
+                 double releaseSeconds)
+        : maxVoices_(maxVoices),
+          sampleRate_(sampleRate > 0.0 ? sampleRate : 44100.0),
+          attackSeconds_(attackSeconds),
+          releaseSeconds_(releaseSeconds) {}
+
+    void setSampleRate(double sampleRate) {
+        if (sampleRate <= 0.0) {
+            return;
+        }
+        sampleRate_ = sampleRate;
+        for (auto& voice : voices_) {
+            voice.envelope.setSampleRate(sampleRate_);
+        }
+    }
+
+    void setAttackSeconds(double seconds) {
+        attackSeconds_ = std::max(0.0, seconds);
+        for (auto& voice : voices_) {
+            voice.envelope.setAttackSeconds(attackSeconds_);
+        }
+    }
+
+    void setReleaseSeconds(double seconds) {
+        releaseSeconds_ = std::max(0.0, seconds);
+        for (auto& voice : voices_) {
+            voice.envelope.setReleaseSeconds(releaseSeconds_);
+        }
+    }
+
+    void noteOn(int noteId, double frequency, float velocity,
+                const synthesis::StringConfig& config) {
+        if (frequency <= 0.0) {
+            return;
+        }
+        Voice* voice = findVoiceByNote(noteId);
+        if (!voice) {
+            voice = allocateVoice();
+        }
+        if (!voice) {
+            return;
+        }
+        voice->noteId = noteId;
+        voice->frequency = frequency;
+        voice->velocity = velocity;
+        voice->age = ++ageCounter_;
+        voice->energy = 0.0f;
+
+        synthesis::StringConfig voiceConfig = config;
+        voiceConfig.sampleRate = sampleRate_;
+        voice->string.updateConfig(voiceConfig);
+        voice->string.start(frequency);
+
+        voice->envelope.setSampleRate(sampleRate_);
+        voice->envelope.setAttackSeconds(attackSeconds_);
+        voice->envelope.setReleaseSeconds(releaseSeconds_);
+        voice->envelope.noteOn(velocity);
+    }
+
+    void noteOff(int noteId) {
+        if (noteId < 0) {
+            return;
+        }
+        for (auto& voice : voices_) {
+            if (voice.noteId == noteId) {
+                voice.envelope.setReleaseSeconds(releaseSeconds_);
+                voice.envelope.noteOff();
+            }
+        }
+    }
+
+    float renderFrame(float masterGain) {
+        float mixed = 0.0f;
+        for (auto& voice : voices_) {
+            if (voice.envelope.isIdle()) {
+                continue;
+            }
+            const float env = voice.envelope.next();
+            const float sample = voice.string.processSample() * env * voice.velocity;
+            voice.energy = kEnergyDecay * voice.energy +
+                           (1.0f - kEnergyDecay) * std::abs(sample);
+            mixed += sample;
+        }
+
+        cleanupSilentVoices();
+        return mixed * masterGain;
+    }
+
+    std::size_t activeVoices() const { return voices_.size(); }
+
+private:
+    Voice* findVoiceByNote(int noteId) {
+        auto it = std::find_if(
+            voices_.begin(), voices_.end(),
+            [noteId](const Voice& voice) { return voice.noteId == noteId; });
+        if (it == voices_.end()) {
+            return nullptr;
+        }
+        return &(*it);
+    }
+
+    Voice* allocateVoice() {
+        if (voices_.size() < maxVoices_) {
+            voices_.emplace_back();
+            voices_.back().envelope.setSampleRate(sampleRate_);
+            voices_.back().envelope.setAttackSeconds(attackSeconds_);
+            voices_.back().envelope.setReleaseSeconds(releaseSeconds_);
+            return &voices_.back();
+        }
+        // Voice stealing：优先选择已在释放阶段的 voice；否则取能量最低者，能量相同则选择更早启动的 voice。
+        auto candidate = std::min_element(
+            voices_.begin(), voices_.end(),
+            [](const Voice& a, const Voice& b) {
+                if (a.envelope.isReleasing() != b.envelope.isReleasing()) {
+                    return a.envelope.isReleasing();
+                }
+                if (std::abs(a.energy - b.energy) > std::numeric_limits<float>::epsilon()) {
+                    return a.energy < b.energy;
+                }
+                return a.age < b.age;
+            });
+        if (candidate == voices_.end()) {
+            return nullptr;
+        }
+        return &(*candidate);
+    }
+
+    void cleanupSilentVoices() {
+        voices_.erase(
+            std::remove_if(voices_.begin(), voices_.end(),
+                           [](const Voice& voice) {
+                               return voice.envelope.isIdle() ||
+                                      (voice.envelope.isReleasing() &&
+                                       voice.energy < kVoiceSilenceThreshold);
+                           }),
+            voices_.end());
+    }
+
+    std::vector<Voice> voices_;
+    const std::size_t maxVoices_;
+    double sampleRate_ = 44100.0;
+    double attackSeconds_ = kDefaultAttackSecondsValue;
+    double releaseSeconds_ = 0.35;
+    std::uint64_t ageCounter_ = 0;
+};
 
 StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
     : config_(config) {
     if (const auto* info = GetParamInfo(ParamId::AmpRelease)) {
         ampReleaseSeconds_ = info->defaultValue;
     }
+    voiceManager_ = std::make_unique<VoiceManager>(
+        kMaxVoices, config_.sampleRate, kDefaultAttackSeconds, ampReleaseSeconds_);
+    voiceManager_->setReleaseSeconds(ampReleaseSeconds_);
 }
+
+StringSynthEngine::~StringSynthEngine() = default;
 
 void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.sampleRate = config.sampleRate;
+    config_.seed = config.seed;
     applyParamUnlocked(ParamId::Decay, static_cast<float>(config.decay), config_,
                        masterGain_);
     applyParamUnlocked(ParamId::Brightness, config.brightness, config_, masterGain_);
@@ -25,6 +318,7 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::NoiseType,
                        config.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f,
                        config_, masterGain_);
+    voiceManager_->setSampleRate(config_.sampleRate);
 }
 
 synthesis::StringConfig StringSynthEngine::stringConfig() const {
@@ -35,6 +329,7 @@ synthesis::StringConfig StringSynthEngine::stringConfig() const {
 void StringSynthEngine::setSampleRate(double sampleRate) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.sampleRate = sampleRate;
+    voiceManager_->setSampleRate(config_.sampleRate);
 }
 
 double StringSynthEngine::sampleRate() const {
@@ -43,18 +338,48 @@ double StringSynthEngine::sampleRate() const {
 }
 
 void StringSynthEngine::enqueueEvent(const Event& event) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    eventQueue_.push_back(event);
+    enqueueEventAt(event, frameCursor_.load(std::memory_order_relaxed));
 }
 
-void StringSynthEngine::noteOn(int noteId, double frequency, float velocity) {
+void StringSynthEngine::enqueueEventAt(const Event& event,
+                                       std::uint64_t frameOffset) {
+    Event stamped = event;
+    stamped.frameOffset = frameOffset;
+    std::lock_guard<std::mutex> lock(mutex_);
+    eventQueue_.push_back(stamped);
+}
+
+void StringSynthEngine::noteOn(int noteId, double frequency, float velocity,
+                               double durationSeconds) {
+    if (frequency <= 0.0) {
+        return;
+    }
+    std::uint64_t startFrame = frameCursor_.load(std::memory_order_relaxed);
+    double currentSampleRate = 0.0;
+    int resolvedNoteId = noteId;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        currentSampleRate = config_.sampleRate;
+        if (resolvedNoteId < 0) {
+            resolvedNoteId = nextNoteId_++;
+        }
+    }
+
     Event event;
     event.type = EventType::NoteOn;
-    event.noteId = noteId;
+    event.noteId = resolvedNoteId;
     event.velocity = velocity;
     event.frequency = frequency;
-    event.durationSeconds = 6.0;
-    enqueueEvent(event);
+    enqueueEventAt(event, startFrame);
+
+    if (durationSeconds > 0.0 && currentSampleRate > 0.0) {
+        const auto deltaFrames = static_cast<std::uint64_t>(
+            std::max(0.0, std::round(durationSeconds * currentSampleRate)));
+        Event off;
+        off.type = EventType::NoteOff;
+        off.noteId = resolvedNoteId;
+        enqueueEventAt(off, startFrame + deltaFrames);
+    }
 }
 
 void StringSynthEngine::noteOff(int noteId) {
@@ -64,17 +389,11 @@ void StringSynthEngine::noteOff(int noteId) {
     Event event;
     event.type = EventType::NoteOff;
     event.noteId = noteId;
-    event.frequency = 0.0;
-    event.durationSeconds = 0.0;
     enqueueEvent(event);
 }
 
 void StringSynthEngine::noteOn(double frequency, double durationSeconds) {
-    Event event;
-    event.type = EventType::NoteOn;
-    event.frequency = frequency;
-    event.durationSeconds = durationSeconds;
-    enqueueEvent(event);
+    noteOn(-1, frequency, 1.0f, durationSeconds);
 }
 
 void StringSynthEngine::setParam(ParamId id, float value) {
@@ -111,8 +430,11 @@ void StringSynthEngine::process(const ProcessBlock& block) {
     const std::size_t totalSamples = block.frames * block.channels;
     std::fill(block.output, block.output + totalSamples, 0.0f);
 
-    std::vector<Event> events;
-    std::vector<Voice> localVoices;
+    const std::uint64_t blockStartFrame =
+        frameCursor_.load(std::memory_order_relaxed);
+    const std::uint64_t blockEndFrame = blockStartFrame + block.frames;
+
+    std::vector<Event> pendingEvents;
     synthesis::StringConfig currentConfig{};
     float currentMasterGain = 1.0f;
     double currentAmpRelease = 0.0;
@@ -121,129 +443,110 @@ void StringSynthEngine::process(const ProcessBlock& block) {
         currentConfig = config_;
         currentMasterGain = masterGain_;
         currentAmpRelease = ampReleaseSeconds_;
-        events.swap(eventQueue_);
-        localVoices.swap(voices_);
+        pendingEvents.swap(eventQueue_);
     }
 
-    for (const auto& event : events) {
-        if (event.type == EventType::NoteOff) {
-            handleNoteOff(event.noteId, localVoices, currentAmpRelease,
-                          currentConfig.sampleRate);
-            continue;
+    voiceManager_->setSampleRate(currentConfig.sampleRate);
+    voiceManager_->setReleaseSeconds(currentAmpRelease);
+
+    std::vector<Event> readyEvents;
+    std::vector<Event> futureEvents;
+    readyEvents.reserve(pendingEvents.size());
+    futureEvents.reserve(pendingEvents.size());
+
+    for (auto& event : pendingEvents) {
+        if (event.frameOffset <= blockStartFrame) {
+            event.frameOffset = blockStartFrame;
+            readyEvents.push_back(event);
+        } else if (event.frameOffset < blockEndFrame) {
+            readyEvents.push_back(event);
+        } else {
+            futureEvents.push_back(event);
         }
-        handleEvent(event, currentConfig, localVoices, currentMasterGain,
-                    currentAmpRelease);
     }
 
-    mixVoices(block, localVoices, currentMasterGain);
+    std::stable_sort(
+        readyEvents.begin(), readyEvents.end(),
+        [](const Event& a, const Event& b) { return a.frameOffset < b.frameOffset; });
+
+    std::size_t eventIndex = 0;
+    for (std::size_t frame = 0; frame < block.frames; ++frame) {
+        const std::uint64_t absoluteFrame = blockStartFrame + frame;
+        while (eventIndex < readyEvents.size() &&
+               readyEvents[eventIndex].frameOffset <= absoluteFrame) {
+            handleEvent(readyEvents[eventIndex], currentConfig, currentMasterGain,
+                        currentAmpRelease);
+            ++eventIndex;
+        }
+
+        const float sample = voiceManager_->renderFrame(currentMasterGain);
+        for (uint16_t ch = 0; ch < block.channels; ++ch) {
+            block.output[frame * block.channels + ch] += sample;
+        }
+    }
+
+    frameCursor_.fetch_add(block.frames, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
         config_ = currentConfig;
         masterGain_ = currentMasterGain;
-        if (!localVoices.empty()) {
-            voices_.insert(voices_.end(),
-                           std::make_move_iterator(localVoices.begin()),
-                           std::make_move_iterator(localVoices.end()));
+        ampReleaseSeconds_ = currentAmpRelease;
+        if (!futureEvents.empty()) {
+            eventQueue_.insert(eventQueue_.end(),
+                               std::make_move_iterator(futureEvents.begin()),
+                               std::make_move_iterator(futureEvents.end()));
+            std::stable_sort(
+                eventQueue_.begin(), eventQueue_.end(),
+                [](const Event& a, const Event& b) {
+                    return a.frameOffset < b.frameOffset;
+                });
         }
     }
+}
+
+std::size_t StringSynthEngine::activeVoiceCount() const {
+    return voiceManager_ ? voiceManager_->activeVoices() : 0;
+}
+
+std::size_t StringSynthEngine::queuedEventCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return eventQueue_.size();
+}
+
+std::uint64_t StringSynthEngine::renderedFrames() const {
+    return frameCursor_.load(std::memory_order_relaxed);
+}
+
+std::vector<std::uint64_t> StringSynthEngine::queuedEventFrames() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::uint64_t> frames;
+    frames.reserve(eventQueue_.size());
+    for (const auto& event : eventQueue_) {
+        frames.push_back(event.frameOffset);
+    }
+    return frames;
 }
 
 void StringSynthEngine::handleEvent(const Event& event,
                                     synthesis::StringConfig& config,
-                                    std::vector<Voice>& voices,
                                     float& masterGain,
-                                    double ampRelease) {
+                                    double& ampRelease) {
     switch (event.type) {
         case EventType::NoteOn:
-            handleNoteOn(event.frequency, event.durationSeconds, config, event.noteId,
-                         event.velocity, voices, ampRelease);
+            voiceManager_->noteOn(event.noteId, event.frequency, event.velocity, config);
+            break;
+        case EventType::NoteOff:
+            voiceManager_->noteOff(event.noteId);
             break;
         case EventType::ParamChange:
             applyParamUnlocked(event.param, event.paramValue, config, masterGain);
+            ampRelease = ampReleaseSeconds_;
+            voiceManager_->setReleaseSeconds(ampRelease);
             break;
         default:
             break;
     }
-}
-
-void StringSynthEngine::handleNoteOn(double frequency, double durationSeconds,
-                                     const synthesis::StringConfig& config, int noteId,
-                                     float velocity, std::vector<Voice>& voices,
-                                     double ampRelease) {
-    if (frequency <= 0.0 || durationSeconds <= 0.0 ||
-        config.sampleRate <= 0.0) {
-        return;
-    }
-    if (voices.size() >= kMaxVoices) {
-        auto it = std::max_element(
-            voices.begin(), voices.end(),
-            [](const Voice& a, const Voice& b) { return a.cursor < b.cursor; });
-        if (it != voices.end()) {
-            voices.erase(it);
-        }
-    }
-    synthesis::KarplusStrongString string(config);
-    const double sustainSeconds = std::max(durationSeconds, 6.0);
-    auto samples = string.pluck(frequency, sustainSeconds);
-    if (samples.empty()) {
-        return;
-    }
-    Voice v;
-    v.buffer = std::move(samples);
-    v.cursor = 0;
-    v.releaseStart = std::numeric_limits<std::size_t>::max();
-    v.releaseSamples =
-        static_cast<std::size_t>(std::max(0.0, ampRelease * config.sampleRate));
-    v.noteId = noteId;
-    v.velocity = velocity;
-    v.state = Voice::State::Active;
-    voices.push_back(std::move(v));
-}
-
-void StringSynthEngine::handleNoteOff(int noteId, std::vector<Voice>& voices,
-                                      double ampRelease, double sampleRateValue) {
-    if (noteId < 0) {
-        return;
-    }
-    for (auto& voice : voices) {
-        if (voice.noteId != noteId || voice.state == Voice::State::Releasing) {
-            continue;
-        }
-        voice.state = Voice::State::Releasing;
-        voice.releaseStart = voice.cursor;
-        voice.releaseSamples =
-            static_cast<std::size_t>(std::max(0.0, ampRelease * sampleRateValue));
-        break;
-    }
-}
-
-void StringSynthEngine::mixVoices(const ProcessBlock& block,
-                                  std::vector<Voice>& voices,
-                                  float masterGain) const {
-    for (auto& voice : voices) {
-        const auto bufferSize = voice.buffer.size();
-        for (std::size_t frame = 0; frame < block.frames && voice.cursor < bufferSize;
-             ++frame) {
-            const float envelope = ComputeReleaseEnvelope(voice);
-            const float sample = voice.buffer[voice.cursor++] * masterGain * envelope;
-            for (uint16_t ch = 0; ch < block.channels; ++ch) {
-                block.output[frame * block.channels + ch] += sample;
-            }
-        }
-    }
-
-    voices.erase(
-        std::remove_if(voices.begin(), voices.end(),
-                       [](const Voice& voice) {
-                           const bool finishedBuffer = voice.cursor >= voice.buffer.size();
-                           const bool finishedRelease =
-                               voice.state == Voice::State::Releasing &&
-                               voice.releaseSamples > 0 &&
-                               voice.cursor >= voice.releaseStart + voice.releaseSamples;
-                           return finishedBuffer || finishedRelease;
-                       }),
-        voices.end());
 }
 
 void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
@@ -276,26 +579,13 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
             break;
         case ParamId::AmpRelease:
             ampReleaseSeconds_ = clamped;
+            if (voiceManager_) {
+                voiceManager_->setReleaseSeconds(ampReleaseSeconds_);
+            }
             break;
         default:
             break;
     }
-}
-
-float StringSynthEngine::ComputeReleaseEnvelope(const Voice& voice) {
-    if (voice.state != Voice::State::Releasing || voice.releaseSamples == 0 ||
-        voice.releaseStart == std::numeric_limits<std::size_t>::max()) {
-        return voice.velocity;
-    }
-    const std::size_t elapsed = voice.cursor > voice.releaseStart
-                                    ? (voice.cursor - voice.releaseStart)
-                                    : 0;
-    if (elapsed >= voice.releaseSamples) {
-        return 0.0f;
-    }
-    const float factor =
-        1.0f - static_cast<float>(elapsed) / static_cast<float>(voice.releaseSamples);
-    return voice.velocity * factor;
 }
 
 }  // namespace engine

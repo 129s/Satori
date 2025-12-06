@@ -26,7 +26,7 @@ struct KeyboardColors {
 
 class VirtualKeyboard {
 public:
-    using Callback = std::function<void(double)>;
+    using Callback = std::function<void(int midiNote, double frequency, bool pressed)>;
 
     void setBounds(const D2D1_RECT_F& bounds);
     void setCallback(Callback callback);

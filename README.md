@@ -34,8 +34,7 @@ third_party/catch2      Catch2 amalgamated 源码
 ## 配置与构建
 
 ```powershell
-cmake -S . -B build `
-      -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 
 # Debug/Release 任选，其它配置同理
 cmake --build build --config Release
