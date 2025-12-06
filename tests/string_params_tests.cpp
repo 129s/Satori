@@ -15,6 +15,14 @@ TEST_CASE("参数名称查找大小写不敏感", "[engine-params]") {
     const auto* dispersion = engine::FindParamByName("DISPERSIONamount");
     REQUIRE(dispersion != nullptr);
     REQUIRE(dispersion->id == engine::ParamId::DispersionAmount);
+
+    const auto* exciteColor = engine::FindParamByName("excitationBrightness");
+    REQUIRE(exciteColor != nullptr);
+    REQUIRE(exciteColor->id == engine::ParamId::ExcitationBrightness);
+
+    const auto* bodyTone = engine::FindParamByName("BODYTONE");
+    REQUIRE(bodyTone != nullptr);
+    REQUIRE(bodyTone->id == engine::ParamId::BodyTone);
 }
 
 TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]") {
@@ -23,6 +31,10 @@ TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]")
     synth.setParam(engine::ParamId::Decay, 2.0f);
     synth.setParam(engine::ParamId::Brightness, -1.0f);
     synth.setParam(engine::ParamId::DispersionAmount, 5.0f);
+    synth.setParam(engine::ParamId::ExcitationBrightness, 2.0f);
+    synth.setParam(engine::ParamId::ExcitationVelocity, -1.0f);
+    synth.setParam(engine::ParamId::BodyTone, 2.0f);
+    synth.setParam(engine::ParamId::BodySize, -2.0f);
     synth.setParam(engine::ParamId::PickPosition, 0.0f);
     synth.setParam(engine::ParamId::EnableLowpass, 0.0f);
     synth.setParam(engine::ParamId::NoiseType, 1.0f);
@@ -34,12 +46,22 @@ TEST_CASE("StringSynthEngine 参数写入会按范围钳制", "[engine-params]")
     const auto* brightnessInfo = engine::GetParamInfo(engine::ParamId::Brightness);
     const auto* dispersionInfo =
         engine::GetParamInfo(engine::ParamId::DispersionAmount);
+    const auto* exciteColorInfo =
+        engine::GetParamInfo(engine::ParamId::ExcitationBrightness);
+    const auto* exciteVelInfo =
+        engine::GetParamInfo(engine::ParamId::ExcitationVelocity);
+    const auto* bodyToneInfo = engine::GetParamInfo(engine::ParamId::BodyTone);
+    const auto* bodySizeInfo = engine::GetParamInfo(engine::ParamId::BodySize);
     const auto* pickInfo = engine::GetParamInfo(engine::ParamId::PickPosition);
     const auto* gainInfo = engine::GetParamInfo(engine::ParamId::MasterGain);
 
     REQUIRE(config.decay == Catch::Approx(decayInfo->maxValue));
     REQUIRE(config.brightness == Catch::Approx(brightnessInfo->minValue));
     REQUIRE(config.dispersionAmount == Catch::Approx(dispersionInfo->maxValue));
+    REQUIRE(config.excitationBrightness == Catch::Approx(exciteColorInfo->maxValue));
+    REQUIRE(config.excitationVelocity == Catch::Approx(exciteVelInfo->minValue));
+    REQUIRE(config.bodyTone == Catch::Approx(bodyToneInfo->maxValue));
+    REQUIRE(config.bodySize == Catch::Approx(bodySizeInfo->minValue));
     REQUIRE(config.pickPosition == Catch::Approx(pickInfo->minValue));
     REQUIRE(config.enableLowpass == false);
     REQUIRE(config.noiseType == synthesis::NoiseType::Binary);

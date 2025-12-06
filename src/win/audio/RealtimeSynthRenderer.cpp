@@ -15,7 +15,7 @@ void RealtimeSynthRenderer::setConfig(const synthesis::StringConfig& config) {
 
 void RealtimeSynthRenderer::enqueueNote(double frequency, double durationSeconds) {
     synthesis::KarplusStrongString string(config_);
-    auto samples = string.pluck(frequency, durationSeconds);
+    auto samples = string.pluck(frequency, durationSeconds, 1.0f);
     if (samples.empty()) {
         return;
     }

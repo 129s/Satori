@@ -23,7 +23,11 @@ struct AppConfig {
     float decay = 0.996f;
     float brightness = 0.5f;
     float dispersionAmount = 0.12f;
+    float excitationBrightness = 0.6f;
+    float excitationVelocity = 0.5f;
     float pickPosition = 0.5f;
+    float bodyTone = 0.5f;
+    float bodySize = 0.5f;
     bool enableLowpass = true;
     synthesis::NoiseType noiseType = synthesis::NoiseType::White;
     unsigned int seed = 0;
@@ -34,7 +38,8 @@ struct AppConfig {
 void printUsage() {
     std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
-                 "[--dispersion 0.12] [--pickpos 0.5] [--noise white|binary] [--filter lowpass|none] "
+                 "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--pickpos 0.5] "
+                 "[--bodyTone 0.5] [--bodySize 0.5] [--noise white|binary] [--filter lowpass|none] "
                  "[--release 0.35] [--seed 1234] [--output out.wav]\n";
 }
 
@@ -128,10 +133,21 @@ float defaultDispersionAmount() {
     return 0.12f;
 }
 
+float defaultValue(engine::ParamId id, float fallback) {
+    if (const auto* info = engine::GetParamInfo(id)) {
+        return info->defaultValue;
+    }
+    return fallback;
+}
+
 AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     AppConfig config;
     config.ampRelease = defaultAmpRelease();
     config.dispersionAmount = defaultDispersionAmount();
+    config.excitationBrightness = defaultValue(engine::ParamId::ExcitationBrightness, 0.6f);
+    config.excitationVelocity = defaultValue(engine::ParamId::ExcitationVelocity, 0.5f);
+    config.bodyTone = defaultValue(engine::ParamId::BodyTone, 0.5f);
+    config.bodySize = defaultValue(engine::ParamId::BodySize, 0.5f);
     showHelp = false;
 
     std::unordered_map<std::string, std::string> kv;
@@ -167,8 +183,20 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     if (auto it = kv.find("dispersion"); it != kv.end()) {
         parseFloat(it->second, config.dispersionAmount);
     }
+    if (auto it = kv.find("exciteColor"); it != kv.end()) {
+        parseFloat(it->second, config.excitationBrightness);
+    }
+    if (auto it = kv.find("exciteVel"); it != kv.end()) {
+        parseFloat(it->second, config.excitationVelocity);
+    }
     if (auto it = kv.find("pickpos"); it != kv.end()) {
         parseFloat(it->second, config.pickPosition);
+    }
+    if (auto it = kv.find("bodyTone"); it != kv.end()) {
+        parseFloat(it->second, config.bodyTone);
+    }
+    if (auto it = kv.find("bodySize"); it != kv.end()) {
+        parseFloat(it->second, config.bodySize);
     }
     if (auto it = kv.find("noise"); it != kv.end()) {
         parseNoise(it->second, config.noiseType);
@@ -283,7 +311,12 @@ int main(int argc, char** argv) {
     synthEngine.setParam(engine::ParamId::Decay, appConfig.decay);
     synthEngine.setParam(engine::ParamId::Brightness, appConfig.brightness);
     synthEngine.setParam(engine::ParamId::DispersionAmount, appConfig.dispersionAmount);
+    synthEngine.setParam(engine::ParamId::ExcitationBrightness,
+                         appConfig.excitationBrightness);
+    synthEngine.setParam(engine::ParamId::ExcitationVelocity, appConfig.excitationVelocity);
     synthEngine.setParam(engine::ParamId::PickPosition, appConfig.pickPosition);
+    synthEngine.setParam(engine::ParamId::BodyTone, appConfig.bodyTone);
+    synthEngine.setParam(engine::ParamId::BodySize, appConfig.bodySize);
     synthEngine.setParam(engine::ParamId::EnableLowpass, appConfig.enableLowpass ? 1.0f : 0.0f);
     synthEngine.setParam(engine::ParamId::NoiseType,
                          appConfig.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f);

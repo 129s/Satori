@@ -146,6 +146,38 @@ bool PresetManager::parse(const std::string& content,
         }
         params.setParam(engine::ParamId::Brightness, value);
     }
+    if (auto exciteColor = ExtractValue(content, "excitationBrightness")) {
+        const float value = ParseFloat(*exciteColor, ok);
+        if (!ok) {
+            errorMessage = L"解析 excitationBrightness 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::ExcitationBrightness, value);
+    }
+    if (auto exciteVel = ExtractValue(content, "excitationVelocity")) {
+        const float value = ParseFloat(*exciteVel, ok);
+        if (!ok) {
+            errorMessage = L"解析 excitationVelocity 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::ExcitationVelocity, value);
+    }
+    if (auto bodyTone = ExtractValue(content, "bodyTone")) {
+        const float value = ParseFloat(*bodyTone, ok);
+        if (!ok) {
+            errorMessage = L"解析 bodyTone 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::BodyTone, value);
+    }
+    if (auto bodySize = ExtractValue(content, "bodySize")) {
+        const float value = ParseFloat(*bodySize, ok);
+        if (!ok) {
+            errorMessage = L"解析 bodySize 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::BodySize, value);
+    }
     if (auto dispersion = ExtractValue(content, "dispersionAmount")) {
         const float value = ParseFloat(*dispersion, ok);
         if (!ok) {
@@ -208,7 +240,11 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
     oss << "{\n"
         << "  \"decay\": " << config.decay << ",\n"
         << "  \"brightness\": " << config.brightness << ",\n"
+        << "  \"excitationBrightness\": " << config.excitationBrightness << ",\n"
+        << "  \"excitationVelocity\": " << config.excitationVelocity << ",\n"
         << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
+        << "  \"bodyTone\": " << config.bodyTone << ",\n"
+        << "  \"bodySize\": " << config.bodySize << ",\n"
         << "  \"pickPosition\": " << config.pickPosition << ",\n"
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")

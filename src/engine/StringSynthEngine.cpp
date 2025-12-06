@@ -5,7 +5,54 @@
 #include <iterator>
 #include <limits>
 
+#include "dsp/Filter.h"
+
 namespace engine {
+
+class BodyFilter {
+public:
+    void setSampleRate(double sampleRate) {
+        if (sampleRate <= 0.0) {
+            return;
+        }
+        sampleRate_ = sampleRate;
+        updateCoefficients();
+    }
+
+    void setParams(float tone, float size) {
+        tone_ = std::clamp(tone, 0.0f, 1.0f);
+        size_ = std::clamp(size, 0.0f, 1.0f);
+        updateCoefficients();
+    }
+
+    void reset() {
+        lowFilter_.reset();
+    }
+
+    float process(float input) {
+        const float low = lowFilter_.process(input);
+        const float high = input - low;
+        return low * lowGain_ + high * highGain_;
+    }
+
+private:
+    void updateCoefficients() {
+        const float fc = 180.0f + 800.0f * size_;
+        const float alpha = std::clamp(
+            static_cast<float>((2.0 * 3.141592653589793 * fc) / sampleRate_), 0.001f, 0.99f);
+        lowFilter_.setAlpha(alpha);
+        const float tilt = (tone_ - 0.5f) * 0.6f;
+        lowGain_ = std::clamp(1.0f + (-tilt), 0.6f, 1.6f);
+        highGain_ = std::clamp(1.0f + tilt, 0.6f, 1.6f);
+    }
+
+    dsp::OnePoleLowPass lowFilter_{0.1f};
+    double sampleRate_ = 44100.0;
+    float tone_ = 0.5f;
+    float size_ = 0.5f;
+    float lowGain_ = 1.0f;
+    float highGain_ = 1.0f;
+};
 
 namespace {
 
@@ -198,7 +245,7 @@ public:
         synthesis::StringConfig voiceConfig = config;
         voiceConfig.sampleRate = sampleRate_;
         voice->string.updateConfig(voiceConfig);
-        voice->string.start(frequency);
+        voice->string.start(frequency, velocity);
 
         voice->envelope.setSampleRate(sampleRate_);
         voice->envelope.setAttackSeconds(attackSeconds_);
@@ -301,6 +348,9 @@ StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
     voiceManager_ = std::make_unique<VoiceManager>(
         kMaxVoices, config_.sampleRate, kDefaultAttackSeconds, ampReleaseSeconds_);
     voiceManager_->setReleaseSeconds(ampReleaseSeconds_);
+    bodyFilter_ = std::make_unique<BodyFilter>();
+    bodyFilter_->setSampleRate(config_.sampleRate);
+    bodyFilter_->setParams(config_.bodyTone, config_.bodySize);
 }
 
 StringSynthEngine::~StringSynthEngine() = default;
@@ -314,6 +364,12 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::Brightness, config.brightness, config_, masterGain_);
     applyParamUnlocked(ParamId::DispersionAmount, config.dispersionAmount, config_,
                        masterGain_);
+    applyParamUnlocked(ParamId::ExcitationBrightness, config.excitationBrightness, config_,
+                       masterGain_);
+    applyParamUnlocked(ParamId::ExcitationVelocity, config.excitationVelocity, config_,
+                       masterGain_);
+    applyParamUnlocked(ParamId::BodyTone, config.bodyTone, config_, masterGain_);
+    applyParamUnlocked(ParamId::BodySize, config.bodySize, config_, masterGain_);
     applyParamUnlocked(ParamId::PickPosition, config.pickPosition, config_, masterGain_);
     applyParamUnlocked(ParamId::EnableLowpass, config.enableLowpass ? 1.0f : 0.0f,
                        config_, masterGain_);
@@ -321,6 +377,9 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
                        config.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f,
                        config_, masterGain_);
     voiceManager_->setSampleRate(config_.sampleRate);
+    if (bodyFilter_) {
+        bodyFilter_->setSampleRate(config_.sampleRate);
+    }
 }
 
 synthesis::StringConfig StringSynthEngine::stringConfig() const {
@@ -332,6 +391,9 @@ void StringSynthEngine::setSampleRate(double sampleRate) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.sampleRate = sampleRate;
     voiceManager_->setSampleRate(config_.sampleRate);
+    if (bodyFilter_) {
+        bodyFilter_->setSampleRate(config_.sampleRate);
+    }
 }
 
 double StringSynthEngine::sampleRate() const {
@@ -412,6 +474,14 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.brightness;
         case ParamId::DispersionAmount:
             return config_.dispersionAmount;
+        case ParamId::ExcitationBrightness:
+            return config_.excitationBrightness;
+        case ParamId::ExcitationVelocity:
+            return config_.excitationVelocity;
+        case ParamId::BodyTone:
+            return config_.bodyTone;
+        case ParamId::BodySize:
+            return config_.bodySize;
         case ParamId::PickPosition:
             return config_.pickPosition;
         case ParamId::EnableLowpass:
@@ -483,7 +553,10 @@ void StringSynthEngine::process(const ProcessBlock& block) {
             ++eventIndex;
         }
 
-        const float sample = voiceManager_->renderFrame(currentMasterGain);
+        float sample = voiceManager_->renderFrame(currentMasterGain);
+        if (bodyFilter_) {
+            sample = bodyFilter_->process(sample);
+        }
         for (uint16_t ch = 0; ch < block.channels; ++ch) {
             block.output[frame * block.channels + ch] += sample;
         }
@@ -570,6 +643,24 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
             break;
         case ParamId::DispersionAmount:
             config.dispersionAmount = clamped;
+            break;
+        case ParamId::ExcitationBrightness:
+            config.excitationBrightness = clamped;
+            break;
+        case ParamId::ExcitationVelocity:
+            config.excitationVelocity = clamped;
+            break;
+        case ParamId::BodyTone:
+            config.bodyTone = clamped;
+            if (bodyFilter_) {
+                bodyFilter_->setParams(config.bodyTone, config.bodySize);
+            }
+            break;
+        case ParamId::BodySize:
+            config.bodySize = clamped;
+            if (bodyFilter_) {
+                bodyFilter_->setParams(config.bodyTone, config.bodySize);
+            }
             break;
         case ParamId::PickPosition:
             config.pickPosition = clamped;

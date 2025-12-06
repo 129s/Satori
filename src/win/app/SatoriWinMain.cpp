@@ -142,7 +142,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.diagram.brightness = synthConfig_.brightness;
     model.diagram.dispersionAmount = synthConfig_.dispersionAmount;
     model.diagram.pickPosition = synthConfig_.pickPosition;
-    model.diagram.bodyTone = 0.5f;
+    model.diagram.bodyTone = synthConfig_.bodyTone;
     model.diagram.roomAmount = 0.0f;
     model.diagram.noiseType =
         (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
@@ -164,7 +164,11 @@ winui::UIModel SatoriAppState::buildUIModel() {
     addSlider(L"Decay", 0.90f, 0.999f, synthConfig_.decay);
     addSlider(L"Brightness", 0.0f, 1.0f, synthConfig_.brightness);
     addSlider(L"Dispersion", 0.0f, 1.0f, synthConfig_.dispersionAmount);
+    addSlider(L"Excite Color", 0.0f, 1.0f, synthConfig_.excitationBrightness);
+    addSlider(L"Excite Dyn", 0.0f, 1.0f, synthConfig_.excitationVelocity);
     addSlider(L"Pick Position", 0.05f, 0.95f, synthConfig_.pickPosition);
+    addSlider(L"Body Tone", 0.0f, 1.0f, synthConfig_.bodyTone);
+    addSlider(L"Body Size", 0.0f, 1.0f, synthConfig_.bodySize);
 
     model.keyboardConfig.baseMidiNote = kKeyboardBaseMidiNote;
     model.keyboardConfig.octaveCount = kKeyboardOctaveCount;

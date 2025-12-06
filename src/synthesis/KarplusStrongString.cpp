@@ -34,7 +34,8 @@ KarplusStrongString& KarplusStrongString::operator=(
     KarplusStrongString&&) noexcept = default;
 
 std::vector<float> KarplusStrongString::pluck(double frequency,
-                                              double durationSeconds) {
+                                              double durationSeconds,
+                                              float velocity) {
     if (frequency <= 0.0 || durationSeconds <= 0.0 ||
         config_.sampleRate <= 0.0) {
         return {};
@@ -46,7 +47,7 @@ std::vector<float> KarplusStrongString::pluck(double frequency,
         return {};
     }
 
-    start(frequency);
+    start(frequency, velocity);
     if (!active_) {
         return {};
     }
@@ -85,7 +86,7 @@ void KarplusStrongString::applyPickPositionShape() {
     if (delayBuffer_.size() < 3) {
         return;
     }
-    const float pickPos = clampPick(config_.pickPosition);
+    const float pickPos = clampPick(currentPickPosition_);
     const auto pickIndex = static_cast<std::size_t>(
         pickPos * static_cast<float>(delayBuffer_.size() - 1));
 
@@ -104,6 +105,41 @@ void KarplusStrongString::applyPickPositionShape() {
             static_cast<float>(delayBuffer_.size() - 1 - i) / static_cast<float>(rightCount);
         delayBuffer_[i] *= gain;
     }
+}
+
+void KarplusStrongString::applyExcitationColor() {
+    if (delayBuffer_.empty()) {
+        return;
+    }
+    const float color = clamp01(currentExcitationColor_);
+    if (color <= 0.01f) {
+        return;
+    }
+    // 以一阶低通提取低频分量，高频=原始-低频，然后按色彩系数混合。
+    const float targetAlpha =
+        std::clamp(0.05f + 0.4f * color, 0.01f, 0.95f);
+    float state = 0.0f;
+    for (auto& sample : delayBuffer_) {
+        state = targetAlpha * sample + (1.0f - targetAlpha) * state;
+        const float high = sample - state;
+        const float tilt = (color - 0.5f) * 1.2f;  // 负值偏暗，正值偏亮
+        const float lowGain = 1.0f - 0.4f * tilt;
+        const float highGain = 1.0f + 0.6f * tilt;
+        sample = state * lowGain + high * highGain;
+    }
+}
+
+float KarplusStrongString::computeEffectivePickPosition() const {
+    const float sensitivity = clamp01(config_.excitationVelocity);
+    const float offset = (0.5f - currentVelocity_) * 0.25f * sensitivity;
+    return clampPick(config_.pickPosition + offset);
+}
+
+float KarplusStrongString::computeExcitationColor() const {
+    const float sensitivity = clamp01(config_.excitationVelocity);
+    const float base = clamp01(config_.excitationBrightness);
+    const float delta = (currentVelocity_ - 0.5f) * 0.6f * sensitivity;
+    return clamp01(base + delta);
 }
 
 void KarplusStrongString::configureFilters() {
@@ -134,13 +170,16 @@ void KarplusStrongString::configureFilters() {
     }
 }
 
-void KarplusStrongString::start(double frequency) {
+void KarplusStrongString::start(double frequency, float velocity) {
     if (frequency <= 0.0 || config_.sampleRate <= 0.0) {
         active_ = false;
         return;
     }
 
     currentFrequency_ = frequency;
+    currentVelocity_ = clamp01(velocity);
+    currentPickPosition_ = computeEffectivePickPosition();
+    currentExcitationColor_ = computeExcitationColor();
     configureFilters();
 
     const auto period = static_cast<std::size_t>(
@@ -152,6 +191,7 @@ void KarplusStrongString::start(double frequency) {
 
     fillExcitationNoise();
     applyPickPositionShape();
+    applyExcitationColor();
 
     if (filterChain_) {
         filterChain_->reset();

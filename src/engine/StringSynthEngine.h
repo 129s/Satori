@@ -13,6 +13,8 @@
 
 namespace engine {
 
+class BodyFilter;
+
 enum class EventType { NoteOn, NoteOff, ParamChange };
 
 struct Event {
@@ -76,6 +78,7 @@ private:
     double ampReleaseSeconds_ = 0.35;
     std::vector<Event> eventQueue_;
     std::unique_ptr<VoiceManager> voiceManager_;
+    std::unique_ptr<BodyFilter> bodyFilter_;
     std::atomic<std::uint64_t> frameCursor_{0};
     int nextNoteId_ = 1;
     mutable std::mutex mutex_;

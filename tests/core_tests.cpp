@@ -139,6 +139,50 @@ TEST_CASE("String Loop 频散模块在极端参数下保持稳定", "[ks-string]
     REQUIRE(lowPeak < 2.5f);
 }
 
+TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
+    const double sampleRate = 44100.0;
+    engine::StringSynthEngine engine;
+    engine.setSampleRate(sampleRate);
+    engine.setParam(engine::ParamId::AmpRelease, 0.08f);
+
+    auto toFrames = [sampleRate](double seconds) {
+        return static_cast<std::uint64_t>(
+            std::max(0.0, std::round(seconds * sampleRate)));
+    };
+
+    auto renderWithTone = [&](float tone, float size) {
+        engine.setParam(engine::ParamId::BodyTone, tone);
+        engine.setParam(engine::ParamId::BodySize, size);
+        engine::Event on{};
+        on.type = engine::EventType::NoteOn;
+        on.noteId = 1;
+        on.frequency = 196.0;
+        on.velocity = 0.9f;
+        on.frameOffset = 0;
+
+        engine::Event off{};
+        off.type = engine::EventType::NoteOff;
+        off.noteId = 1;
+        off.frameOffset = toFrames(0.12);
+
+        const std::size_t totalFrames = static_cast<std::size_t>(sampleRate * 0.4);
+        return renderEngineSequence(engine, {on, off}, totalFrames);
+    };
+
+    auto bright = renderWithTone(1.0f, 1.0f);
+    auto warm = renderWithTone(0.0f, 0.2f);
+
+    REQUIRE(std::all_of(bright.begin(), bright.end(),
+                        [](float v) { return std::isfinite(v); }));
+    REQUIRE(std::all_of(warm.begin(), warm.end(),
+                        [](float v) { return std::isfinite(v); }));
+
+    REQUIRE(maxAbs(bright) < 2.0f);
+    REQUIRE(maxAbs(warm) < 2.0f);
+    REQUIRE(rms(bright, toFrames(0.05), toFrames(0.2)) !=
+            Catch::Approx(rms(warm, toFrames(0.05), toFrames(0.2))));
+}
+
 TEST_CASE("StringSynthEngine NoteOn/Off 控制尾音长度", "[engine-core]") {
     const double sampleRate = 48000.0;
     engine::StringSynthEngine engine;

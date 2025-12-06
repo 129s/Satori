@@ -27,11 +27,11 @@ std::vector<float> KarplusStrongSynth::renderNotes(
     std::vector<std::vector<float>> noteBuffers;
     std::vector<std::size_t> offsets;
     noteBuffers.reserve(notes.size());
-    offsets.reserve(notes.size());
+        offsets.reserve(notes.size());
 
     for (const auto& note : notes) {
         KarplusStrongString string(baseConfig_);
-        auto samples = string.pluck(note.frequency, note.duration);
+        auto samples = string.pluck(note.frequency, note.duration, 1.0f);
         if (samples.empty()) {
             continue;
         }
