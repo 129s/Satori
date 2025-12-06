@@ -29,15 +29,18 @@ public:
     void onPointerUp() override;
     std::optional<DebugBoxModel> debugBoxForPoint(float x, float y) const;
     std::shared_ptr<ParameterKnob> activeKnob() const;
+    std::optional<FlowModule> activeModule() const;
 
 private:
     struct KnobEntry {
         SliderDescriptor descriptor;
         std::shared_ptr<ParameterKnob> knob;
+        FlowModule module = FlowModule::kNone;
     };
 
     struct Group {
         std::wstring title;
+        FlowModule module = FlowModule::kNone;
         std::vector<KnobEntry> knobs;
         D2D1_RECT_F bounds{};
     };

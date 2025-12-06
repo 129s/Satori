@@ -48,6 +48,23 @@ DebugBoxModel MakeGroupBox(const D2D1_RECT_F& bounds,
     }
     return model;
 }
+
+FlowModule ModuleFromLabel(const std::wstring& label) {
+    if (label == L"Pick Position" || label == L"Excite Color" ||
+        label == L"Excite Dyn") {
+        return FlowModule::kExcitation;
+    }
+    if (label == L"Decay" || label == L"Brightness" || label == L"Dispersion") {
+        return FlowModule::kString;
+    }
+    if (label == L"Body Tone" || label == L"Body Size") {
+        return FlowModule::kBody;
+    }
+    if (label == L"Room Amount") {
+        return FlowModule::kRoom;
+    }
+    return FlowModule::kNone;
+}
 }  // namespace
 
 KnobPanelNode::KnobPanelNode() = default;
@@ -245,16 +262,23 @@ void KnobPanelNode::rebuildGroups(
 
     Group excitation;
     excitation.title = L"EXCITATION";
+    excitation.module = FlowModule::kExcitation;
     Group stringGroup;
     stringGroup.title = L"STRING";
-    Group filterGroup;
-    filterGroup.title = L"FILTER / OUTPUT";
+    stringGroup.module = FlowModule::kString;
+    Group bodyGroup;
+    bodyGroup.title = L"BODY";
+    bodyGroup.module = FlowModule::kBody;
+    Group roomGroup;
+    roomGroup.title = L"ROOM";
+    roomGroup.module = FlowModule::kRoom;
     Group other;
     other.title = L"OTHER";
 
-    auto makeEntry = [](const SliderDescriptor& desc) {
+    auto makeEntry = [](const SliderDescriptor& desc, FlowModule module) {
         KnobEntry entry;
         entry.descriptor = desc;
+        entry.module = module;
         const float initial = desc.getter ? desc.getter() : desc.min;
         entry.knob = std::make_shared<ParameterKnob>(
             desc.label, desc.min, desc.max, initial,
@@ -267,15 +291,23 @@ void KnobPanelNode::rebuildGroups(
     };
 
     for (const auto& desc : descriptors) {
-        const auto& label = desc.label;
-        if (label == L"Pick Position") {
-            excitation.knobs.push_back(makeEntry(desc));
-        } else if (label == L"Decay") {
-            stringGroup.knobs.push_back(makeEntry(desc));
-        } else if (label == L"Brightness") {
-            filterGroup.knobs.push_back(makeEntry(desc));
-        } else {
-            other.knobs.push_back(makeEntry(desc));
+        const FlowModule module = ModuleFromLabel(desc.label);
+        switch (module) {
+            case FlowModule::kExcitation:
+                excitation.knobs.push_back(makeEntry(desc, module));
+                break;
+            case FlowModule::kString:
+                stringGroup.knobs.push_back(makeEntry(desc, module));
+                break;
+            case FlowModule::kBody:
+                bodyGroup.knobs.push_back(makeEntry(desc, module));
+                break;
+            case FlowModule::kRoom:
+                roomGroup.knobs.push_back(makeEntry(desc, module));
+                break;
+            default:
+                other.knobs.push_back(makeEntry(desc, module));
+                break;
         }
     }
 
@@ -285,8 +317,11 @@ void KnobPanelNode::rebuildGroups(
     if (!stringGroup.knobs.empty()) {
         groups_.push_back(std::move(stringGroup));
     }
-    if (!filterGroup.knobs.empty()) {
-        groups_.push_back(std::move(filterGroup));
+    if (!bodyGroup.knobs.empty()) {
+        groups_.push_back(std::move(bodyGroup));
+    }
+    if (!roomGroup.knobs.empty()) {
+        groups_.push_back(std::move(roomGroup));
     }
     if (!other.knobs.empty()) {
         groups_.push_back(std::move(other));
@@ -302,6 +337,22 @@ std::shared_ptr<ParameterKnob> KnobPanelNode::activeKnob() const {
         }
     }
     return nullptr;
+}
+
+std::optional<FlowModule> KnobPanelNode::activeModule() const {
+    for (const auto& group : groups_) {
+        for (const auto& entry : group.knobs) {
+            if (entry.knob && entry.knob->isDragging()) {
+                if (entry.module != FlowModule::kNone) {
+                    return entry.module;
+                }
+                if (group.module != FlowModule::kNone) {
+                    return group.module;
+                }
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace winui

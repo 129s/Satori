@@ -12,6 +12,7 @@ public:
     FlowDiagramNode();
 
     void setDiagramState(const FlowDiagramState& state);
+    void setHighlightedModule(FlowModule module);
     void setWaveformSamples(const std::vector<float>& samples) override;
 
     float preferredHeight(float) const override;
@@ -23,29 +24,37 @@ private:
     float preferredHeight_ = 260.0f;
 
     void drawExcitation(ID2D1HwndRenderTarget* target,
+                        ID2D1SolidColorBrush* textBrush,
                         ID2D1SolidColorBrush* gridBrush,
                         ID2D1SolidColorBrush* accentBrush,
                         IDWriteTextFormat* textFormat,
-                        const D2D1_RECT_F& rect);
+                        const D2D1_RECT_F& rect,
+                        bool highlighted);
 
     void drawString(ID2D1HwndRenderTarget* target,
+                    ID2D1SolidColorBrush* textBrush,
                     ID2D1SolidColorBrush* gridBrush,
                     ID2D1SolidColorBrush* accentBrush,
                     IDWriteTextFormat* textFormat,
-                    const D2D1_RECT_F& rect);
+                    const D2D1_RECT_F& rect,
+                    bool highlighted);
 
     void drawBody(ID2D1HwndRenderTarget* target,
+                  ID2D1SolidColorBrush* textBrush,
                   ID2D1SolidColorBrush* gridBrush,
                   ID2D1SolidColorBrush* accentBrush,
                   IDWriteTextFormat* textFormat,
-                  const D2D1_RECT_F& rect);
+                  const D2D1_RECT_F& rect,
+                  bool highlighted);
 
     void drawRoom(ID2D1HwndRenderTarget* target,
                   ID2D1SolidColorBrush* panelBrush,
+                  ID2D1SolidColorBrush* textBrush,
                   ID2D1SolidColorBrush* gridBrush,
                   ID2D1SolidColorBrush* accentBrush,
                   IDWriteTextFormat* textFormat,
-                  const D2D1_RECT_F& rect);
+                  const D2D1_RECT_F& rect,
+                  bool highlighted);
 };
 
 }  // namespace winui

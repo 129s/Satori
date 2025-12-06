@@ -201,6 +201,13 @@ void Direct2DContext::updateWaveformSamples(
     }
 }
 
+void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
+    model_.diagram = state;
+    if (flowNode_) {
+        flowNode_->setDiagramState(state);
+    }
+}
+
 void Direct2DContext::syncSliders() {
     if (knobPanelNode_) {
         knobPanelNode_->syncKnobs();
@@ -499,6 +506,17 @@ void Direct2DContext::render() {
     }
 
     if (rootLayout_) {
+        FlowModule highlight = FlowModule::kNone;
+        if (knobPanelNode_) {
+            if (auto module = knobPanelNode_->activeModule()) {
+                highlight = *module;
+            }
+        }
+        model_.diagram.highlightedModule = highlight;
+        if (flowNode_) {
+            flowNode_->setHighlightedModule(highlight);
+        }
+
         auto resources = makeResources();
         rootLayout_->draw(resources);
         if (knobPanelNode_) {

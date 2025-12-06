@@ -139,11 +139,35 @@ TEST_CASE("String Loop 频散模块在极端参数下保持稳定", "[ks-string]
     REQUIRE(lowPeak < 2.5f);
 }
 
+TEST_CASE("String Loop 在关闭低通时仍保持稳定", "[ks-string][dispersion]") {
+    synthesis::StringConfig config;
+    config.sampleRate = 96000.0;
+    config.decay = 0.998f;
+    config.brightness = 1.0f;
+    config.dispersionAmount = 1.0f;
+    config.enableLowpass = false;
+    config.pickPosition = 0.18f;
+    config.seed = 321u;
+
+    synthesis::KarplusStrongString string(config);
+    string.start(1318.51, 0.95f);
+
+    std::vector<float> buffer;
+    buffer.reserve(4096);
+    for (int i = 0; i < 4096; ++i) {
+        buffer.push_back(string.processSample());
+    }
+
+    REQUIRE(std::all_of(buffer.begin(), buffer.end(),
+                        [](float v) { return std::isfinite(v); }));
+    const float peak = maxAbs(buffer);
+    INFO("noLowpassPeak=" << peak);
+    REQUIRE(peak > 0.0005f);
+    REQUIRE(peak < 2.5f);
+}
+
 TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
     const double sampleRate = 44100.0;
-    engine::StringSynthEngine engine;
-    engine.setSampleRate(sampleRate);
-    engine.setParam(engine::ParamId::AmpRelease, 0.08f);
 
     auto toFrames = [sampleRate](double seconds) {
         return static_cast<std::uint64_t>(
@@ -151,6 +175,9 @@ TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
     };
 
     auto renderWithTone = [&](float tone, float size) {
+        engine::StringSynthEngine engine;
+        engine.setSampleRate(sampleRate);
+        engine.setParam(engine::ParamId::AmpRelease, 0.08f);
         engine.setParam(engine::ParamId::BodyTone, tone);
         engine.setParam(engine::ParamId::BodySize, size);
         engine::Event on{};
@@ -169,25 +196,38 @@ TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
         return renderEngineSequence(engine, {on, off}, totalFrames);
     };
 
+    auto neutral = renderWithTone(0.5f, 0.5f);
     auto bright = renderWithTone(1.0f, 1.0f);
     auto warm = renderWithTone(0.0f, 0.2f);
 
+    REQUIRE(std::all_of(neutral.begin(), neutral.end(),
+                        [](float v) { return std::isfinite(v); }));
     REQUIRE(std::all_of(bright.begin(), bright.end(),
                         [](float v) { return std::isfinite(v); }));
     REQUIRE(std::all_of(warm.begin(), warm.end(),
                         [](float v) { return std::isfinite(v); }));
 
+    REQUIRE(maxAbs(neutral) < 2.0f);
     REQUIRE(maxAbs(bright) < 2.0f);
     REQUIRE(maxAbs(warm) < 2.0f);
-    REQUIRE(rms(bright, toFrames(0.05), toFrames(0.2)) !=
-            Catch::Approx(rms(warm, toFrames(0.05), toFrames(0.2))));
+    const auto energyStart = toFrames(0.05);
+    const auto energyEnd = toFrames(0.2);
+    const float neutralEnergy = rms(neutral, energyStart, energyEnd);
+    const float brightEnergy = rms(bright, energyStart, energyEnd);
+    const float warmEnergy = rms(warm, energyStart, energyEnd);
+
+    REQUIRE(neutralEnergy > 0.0f);
+    REQUIRE(brightEnergy < 2.5f);
+    REQUIRE(warmEnergy < 2.5f);
+    REQUIRE(brightEnergy / neutralEnergy < 2.5f);
+    REQUIRE(warmEnergy / neutralEnergy < 2.5f);
+    REQUIRE(brightEnergy / neutralEnergy > 0.35f);
+    REQUIRE(warmEnergy / neutralEnergy > 0.35f);
+    REQUIRE(brightEnergy != Catch::Approx(warmEnergy));
 }
 
 TEST_CASE("Room 模块提供可控的立体扩展", "[engine-room]") {
     const double sampleRate = 48000.0;
-    engine::StringSynthEngine engine;
-    engine.setSampleRate(sampleRate);
-    engine.setParam(engine::ParamId::RoomAmount, 0.8f);
 
     auto toFrames = [sampleRate](double seconds) {
         return static_cast<std::uint64_t>(
@@ -207,14 +247,60 @@ TEST_CASE("Room 模块提供可控的立体扩展", "[engine-room]") {
     off.frameOffset = toFrames(0.2);
 
     const std::size_t totalFrames = static_cast<std::size_t>(sampleRate * 0.5);
-    auto buffer = renderEngineSequence(engine, {on, off}, totalFrames, 2);
 
-    REQUIRE(std::all_of(buffer.begin(), buffer.end(),
+    auto stereoRms = [](const std::vector<float>& buffer, std::size_t startFrame,
+                        std::size_t endFrame) {
+        if (buffer.size() < 2) {
+            return 0.0f;
+        }
+        const std::size_t totalFrames = buffer.size() / 2;
+        const std::size_t clampedEnd = std::min(endFrame, totalFrames);
+        double sum = 0.0;
+        std::size_t count = 0;
+        for (std::size_t frame = startFrame; frame < clampedEnd; ++frame) {
+            const std::size_t idx = frame * 2;
+            if (idx + 1 >= buffer.size()) {
+                break;
+            }
+            const float mono = 0.5f * (buffer[idx] + buffer[idx + 1]);
+            sum += static_cast<double>(mono) * static_cast<double>(mono);
+            ++count;
+        }
+        if (count == 0) {
+            return 0.0f;
+        }
+        return static_cast<float>(std::sqrt(sum / static_cast<double>(count)));
+    };
+
+    auto renderWithRoom = [&](float amount) {
+        engine::StringSynthEngine engine;
+        engine.setSampleRate(sampleRate);
+        engine.setParam(engine::ParamId::RoomAmount, amount);
+        return renderEngineSequence(engine, {on, off}, totalFrames, 2);
+    };
+
+    auto dry = renderWithRoom(0.0f);
+    auto wet = renderWithRoom(1.0f);
+
+    REQUIRE(std::all_of(dry.begin(), dry.end(),
                         [](float v) { return std::isfinite(v); }));
-    const float leftPeak = maxAbs(buffer);
+    REQUIRE(std::all_of(wet.begin(), wet.end(),
+                        [](float v) { return std::isfinite(v); }));
+
+    const auto energyStart = toFrames(0.05);
+    const auto energyEnd = toFrames(0.25);
+    const float dryEnergy = stereoRms(dry, energyStart, energyEnd);
+    const float wetEnergy = stereoRms(wet, energyStart, energyEnd);
+
+    REQUIRE(dryEnergy > 0.0f);
+    REQUIRE(wetEnergy > 0.0f);
+    REQUIRE(wetEnergy < dryEnergy * 1.8f);
+    REQUIRE(wetEnergy > dryEnergy * 0.55f);
+
+    const float leftPeak = maxAbs(wet);
     float rightPeak = 0.0f;
-    for (std::size_t i = 1; i < buffer.size(); i += 2) {
-        rightPeak = std::max(rightPeak, std::abs(buffer[i]));
+    for (std::size_t i = 1; i < wet.size(); i += 2) {
+        rightPeak = std::max(rightPeak, std::abs(wet[i]));
     }
     REQUIRE(leftPeak > 0.001f);
     REQUIRE(rightPeak > 0.001f);

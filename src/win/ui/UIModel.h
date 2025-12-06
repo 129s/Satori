@@ -31,6 +31,14 @@ struct KeyboardConfig {
     bool hoverOutline = false;
 };
 
+enum class FlowModule {
+    kNone = 0,
+    kExcitation,
+    kString,
+    kBody,
+    kRoom,
+};
+
 struct FlowDiagramState {
     float decay = 0.0f;
     float brightness = 0.0f;
@@ -39,6 +47,7 @@ struct FlowDiagramState {
     float bodyTone = 0.0f;
     float roomAmount = 0.0f;
     int noiseType = 0;  // 0 = White, 1 = Binary（或项目内部约定）
+    FlowModule highlightedModule = FlowModule::kNone;
 };
 
 struct UIModel {

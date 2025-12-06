@@ -43,6 +43,7 @@ public:
 
     void setModel(UIModel model);
     void updateWaveformSamples(const std::vector<float>& samples);
+    void updateDiagramState(const FlowDiagramState& state);
     void syncSliders();
     bool onPointerDown(float x, float y);
     bool onPointerMove(float x, float y);

@@ -13,6 +13,10 @@ void FlowDiagramNode::setDiagramState(const FlowDiagramState& state) {
     state_ = state;
 }
 
+void FlowDiagramNode::setHighlightedModule(FlowModule module) {
+    state_.highlightedModule = module;
+}
+
 void FlowDiagramNode::setWaveformSamples(const std::vector<float>& samples) {
     waveformView_.setSamples(samples);
 }
@@ -29,6 +33,17 @@ void FlowDiagramNode::draw(const RenderResources& resources) {
         resources.panelBrush ? resources.panelBrush : resources.trackBrush;
     auto* borderBrush =
         resources.gridBrush ? resources.gridBrush : resources.accentBrush;
+
+    auto fillWithOpacity = [&](ID2D1SolidColorBrush* brush,
+                               const D2D1_RECT_F& rect, float opacity) {
+        if (!brush || opacity <= 0.0f) {
+            return;
+        }
+        const float original = brush->GetOpacity();
+        brush->SetOpacity(opacity);
+        resources.target->FillRectangle(rect, brush);
+        brush->SetOpacity(original);
+    };
 
     if (panelBrush) {
         resources.target->FillRectangle(bounds_, panelBrush);
@@ -59,54 +74,94 @@ void FlowDiagramNode::draw(const RenderResources& resources) {
         bodyRect.right + gap, innerTop,
         bodyRect.right + gap + moduleWidth, innerTop + moduleHeight);
 
+    const bool highlightExcitation =
+        state_.highlightedModule == FlowModule::kExcitation;
+    const bool highlightString =
+        state_.highlightedModule == FlowModule::kString;
+    const bool highlightBody = state_.highlightedModule == FlowModule::kBody;
+    const bool highlightRoom = state_.highlightedModule == FlowModule::kRoom;
+
+    auto drawModuleBackground = [&](const D2D1_RECT_F& rect, bool shared,
+                                    bool highlighted) {
+        const float baseOpacity = shared ? 0.22f : 0.18f;
+        const float activeOpacity = shared ? 0.32f : 0.26f;
+        fillWithOpacity(shared ? resources.trackBrush : resources.fillBrush,
+                        rect, highlighted ? activeOpacity : baseOpacity);
+        if (highlighted) {
+            fillWithOpacity(resources.accentBrush, rect, 0.12f);
+        }
+    };
+
+    drawModuleBackground(excitationRect, false, highlightExcitation);
+    drawModuleBackground(stringRect, false, highlightString);
+    drawModuleBackground(bodyRect, true, highlightBody);
+    drawModuleBackground(roomRect, true, highlightRoom);
+
     // 模块边框
-    if (borderBrush) {
-        resources.target->DrawRectangle(excitationRect, borderBrush, 1.0f);
-        resources.target->DrawRectangle(stringRect, borderBrush, 1.0f);
-        resources.target->DrawRectangle(bodyRect, borderBrush, 1.0f);
-        resources.target->DrawRectangle(roomRect, borderBrush, 1.0f);
-    }
+    auto drawModuleBorder = [&](const D2D1_RECT_F& rect, bool highlighted) {
+        auto* brush =
+            highlighted && resources.accentBrush ? resources.accentBrush : borderBrush;
+        const float thickness = highlighted ? 2.0f : 1.0f;
+        if (brush) {
+            resources.target->DrawRectangle(rect, brush, thickness);
+        }
+    };
+
+    drawModuleBorder(excitationRect, highlightExcitation);
+    drawModuleBorder(stringRect, highlightString);
+    drawModuleBorder(bodyRect, highlightBody);
+    drawModuleBorder(roomRect, highlightRoom);
 
     // 连接箭头
     auto drawArrow = [&](const D2D1_POINT_2F& from,
-                         const D2D1_POINT_2F& to) {
+                         const D2D1_POINT_2F& to, bool emphasized) {
         if (!resources.accentBrush) {
             return;
         }
-        resources.target->DrawLine(from, to, resources.accentBrush, 1.5f);
+        const float thickness = emphasized ? 2.0f : 1.5f;
+        resources.target->DrawLine(from, to, resources.accentBrush, thickness);
         const float angle = std::atan2(to.y - from.y, to.x - from.x);
         const float len = 6.0f;
         const float a1 = angle + 3.1415926f * 0.75f;
         const float a2 = angle - 3.1415926f * 0.75f;
         D2D1_POINT_2F p1{to.x + std::cos(a1) * len, to.y + std::sin(a1) * len};
         D2D1_POINT_2F p2{to.x + std::cos(a2) * len, to.y + std::sin(a2) * len};
-        resources.target->DrawLine(to, p1, resources.accentBrush, 1.5f);
-        resources.target->DrawLine(to, p2, resources.accentBrush, 1.5f);
+        resources.target->DrawLine(to, p1, resources.accentBrush, thickness);
+        resources.target->DrawLine(to, p2, resources.accentBrush, thickness);
     };
 
     const float midY = innerTop + moduleHeight * 0.5f;
     drawArrow(D2D1::Point2F(excitationRect.right, midY),
-              D2D1::Point2F(stringRect.left, midY));
+              D2D1::Point2F(stringRect.left, midY),
+              highlightExcitation || highlightString);
     drawArrow(D2D1::Point2F(stringRect.right, midY),
-              D2D1::Point2F(bodyRect.left, midY));
+              D2D1::Point2F(bodyRect.left, midY),
+              highlightString || highlightBody);
     drawArrow(D2D1::Point2F(bodyRect.right, midY),
-              D2D1::Point2F(roomRect.left, midY));
+              D2D1::Point2F(roomRect.left, midY),
+              highlightBody || highlightRoom);
 
-    drawExcitation(resources.target, resources.gridBrush, resources.accentBrush,
-                   resources.textFormat, excitationRect);
-    drawString(resources.target, resources.gridBrush, resources.accentBrush,
-               resources.textFormat, stringRect);
-    drawBody(resources.target, resources.gridBrush, resources.accentBrush,
-             resources.textFormat, bodyRect);
-    drawRoom(resources.target, panelBrush, resources.gridBrush,
-             resources.accentBrush, resources.textFormat, roomRect);
+    drawExcitation(resources.target, resources.textBrush, resources.gridBrush,
+                   resources.accentBrush, resources.textFormat, excitationRect,
+                   highlightExcitation);
+    drawString(resources.target, resources.textBrush, resources.gridBrush,
+               resources.accentBrush, resources.textFormat, stringRect,
+               highlightString);
+    drawBody(resources.target, resources.textBrush, resources.gridBrush,
+             resources.accentBrush, resources.textFormat, bodyRect,
+             highlightBody);
+    drawRoom(resources.target, panelBrush, resources.textBrush,
+             resources.gridBrush, resources.accentBrush, resources.textFormat,
+             roomRect, highlightRoom);
 }
 
 void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
+                                     ID2D1SolidColorBrush* textBrush,
                                      ID2D1SolidColorBrush* gridBrush,
                                      ID2D1SolidColorBrush* accentBrush,
                                      IDWriteTextFormat* textFormat,
-                                     const D2D1_RECT_F& rect) {
+                                     const D2D1_RECT_F& rect,
+                                     bool highlighted) {
     if (!target || !textFormat) {
         return;
     }
@@ -115,15 +170,19 @@ void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
         D2D1::RectF(rect.left + padding, rect.top + padding,
                     rect.right - padding, rect.top + padding + 18.0f);
     const std::wstring title = L"EXCITATION";
+    ID2D1SolidColorBrush* titleBrush =
+        textBrush ? textBrush : (gridBrush ? gridBrush : accentBrush);
     target->DrawText(title.c_str(), static_cast<UINT32>(title.size()),
-                     textFormat, titleRect, gridBrush ? gridBrush : accentBrush);
+                     textFormat, titleRect, titleBrush);
 
     const auto roleRect = D2D1::RectF(titleRect.left, titleRect.bottom + 2.0f,
                                       titleRect.right, titleRect.bottom + 16.0f);
     const std::wstring role = L"per-voice";
-    if (gridBrush) {
+    ID2D1SolidColorBrush* roleBrush =
+        highlighted && accentBrush ? accentBrush : (gridBrush ? gridBrush : textBrush);
+    if (roleBrush) {
         target->DrawText(role.c_str(), static_cast<UINT32>(role.size()),
-                         textFormat, roleRect, gridBrush);
+                         textFormat, roleRect, roleBrush);
     }
 
     const float innerTop = roleRect.bottom + 4.0f;
@@ -132,7 +191,9 @@ void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
     const float innerRight = rect.right - padding;
 
     // 噪声纹理：简单的竖线阵列
-    if (gridBrush) {
+    ID2D1SolidColorBrush* textureBrush =
+        highlighted && accentBrush ? accentBrush : gridBrush;
+    if (textureBrush) {
         const float width = innerRight - innerLeft;
         const int lines = 12;
         for (int i = 0; i < lines; ++i) {
@@ -142,7 +203,8 @@ void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
             const float top =
                 innerTop + (1.0f - hFactor) * (innerBottom - innerTop);
             target->DrawLine(D2D1::Point2F(x, top),
-                             D2D1::Point2F(x, innerBottom), gridBrush, 1.0f);
+                             D2D1::Point2F(x, innerBottom), textureBrush,
+                             highlighted ? 1.6f : 1.0f);
         }
     }
 
@@ -151,19 +213,23 @@ void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
         const float stringY =
             innerTop + (innerBottom - innerTop) * 0.25f;
         target->DrawLine(D2D1::Point2F(innerLeft, stringY),
-                         D2D1::Point2F(innerRight, stringY), accentBrush, 1.5f);
+                         D2D1::Point2F(innerRight, stringY), accentBrush,
+                         highlighted ? 2.2f : 1.5f);
         const float pos = std::clamp(state_.pickPosition, 0.0f, 1.0f);
         const float x = innerLeft + (innerRight - innerLeft) * pos;
         target->DrawLine(D2D1::Point2F(x, stringY - 6.0f),
-                         D2D1::Point2F(x, stringY + 6.0f), accentBrush, 2.0f);
+                         D2D1::Point2F(x, stringY + 6.0f), accentBrush,
+                         highlighted ? 2.6f : 2.0f);
     }
 }
 
 void FlowDiagramNode::drawString(ID2D1HwndRenderTarget* target,
+                                 ID2D1SolidColorBrush* textBrush,
                                  ID2D1SolidColorBrush* gridBrush,
                                  ID2D1SolidColorBrush* accentBrush,
                                  IDWriteTextFormat* textFormat,
-                                 const D2D1_RECT_F& rect) {
+                                 const D2D1_RECT_F& rect,
+                                 bool highlighted) {
     if (!target || !textFormat) {
         return;
     }
@@ -172,15 +238,19 @@ void FlowDiagramNode::drawString(ID2D1HwndRenderTarget* target,
         D2D1::RectF(rect.left + padding, rect.top + padding,
                     rect.right - padding, rect.top + padding + 18.0f);
     const std::wstring title = L"STRING LOOP";
+    ID2D1SolidColorBrush* titleBrush =
+        textBrush ? textBrush : (gridBrush ? gridBrush : accentBrush);
     target->DrawText(title.c_str(), static_cast<UINT32>(title.size()),
-                     textFormat, titleRect, gridBrush ? gridBrush : accentBrush);
+                     textFormat, titleRect, titleBrush);
 
     const auto roleRect = D2D1::RectF(titleRect.left, titleRect.bottom + 2.0f,
                                       titleRect.right, titleRect.bottom + 16.0f);
     const std::wstring role = L"per-voice";
-    if (gridBrush) {
+    ID2D1SolidColorBrush* roleBrush =
+        highlighted && accentBrush ? accentBrush : (gridBrush ? gridBrush : textBrush);
+    if (roleBrush) {
         target->DrawText(role.c_str(), static_cast<UINT32>(role.size()),
-                         textFormat, roleRect, gridBrush);
+                         textFormat, roleRect, roleBrush);
     }
 
     const float innerTop = roleRect.bottom + 4.0f;
@@ -207,9 +277,10 @@ void FlowDiagramNode::drawString(ID2D1HwndRenderTarget* target,
                            baseY - height * sustainLevel};
     const D2D1_POINT_2F p3{innerRight, baseY};
 
-    target->DrawLine(p0, p1, accentBrush, 2.0f);
-    target->DrawLine(p1, p2, accentBrush, 2.0f);
-    target->DrawLine(p2, p3, accentBrush, 2.0f);
+    const float thickness = highlighted ? 2.6f : 2.0f;
+    target->DrawLine(p0, p1, accentBrush, thickness);
+    target->DrawLine(p1, p2, accentBrush, thickness);
+    target->DrawLine(p2, p3, accentBrush, thickness);
 
     const float dispersion = std::clamp(state_.dispersionAmount, 0.0f, 1.0f);
     if (gridBrush && dispersion > 0.001f) {
@@ -220,16 +291,18 @@ void FlowDiagramNode::drawString(ID2D1HwndRenderTarget* target,
             const float x = innerLeft + spacing * (i + 1);
             D2D1_POINT_2F a{x, innerBottom};
             D2D1_POINT_2F b{x + tilt, innerTop + height * 0.35f};
-            target->DrawLine(a, b, gridBrush, 1.0f);
+            target->DrawLine(a, b, gridBrush, highlighted ? 1.6f : 1.0f);
         }
     }
 }
 
 void FlowDiagramNode::drawBody(ID2D1HwndRenderTarget* target,
+                               ID2D1SolidColorBrush* textBrush,
                                ID2D1SolidColorBrush* gridBrush,
                                ID2D1SolidColorBrush* accentBrush,
                                IDWriteTextFormat* textFormat,
-                               const D2D1_RECT_F& rect) {
+                               const D2D1_RECT_F& rect,
+                               bool highlighted) {
     if (!target || !textFormat) {
         return;
     }
@@ -238,8 +311,10 @@ void FlowDiagramNode::drawBody(ID2D1HwndRenderTarget* target,
         D2D1::RectF(rect.left + padding, rect.top + padding,
                     rect.right - padding, rect.top + padding + 18.0f);
     const std::wstring title = L"BODY (SHARED)";
+    ID2D1SolidColorBrush* titleBrush =
+        textBrush ? textBrush : (gridBrush ? gridBrush : accentBrush);
     target->DrawText(title.c_str(), static_cast<UINT32>(title.size()),
-                     textFormat, titleRect, gridBrush ? gridBrush : accentBrush);
+                     textFormat, titleRect, titleBrush);
 
     const float innerTop = titleRect.bottom + 4.0f;
     const float innerBottom = rect.bottom - padding;
@@ -253,8 +328,10 @@ void FlowDiagramNode::drawBody(ID2D1HwndRenderTarget* target,
         const std::wstring role = L"shared";
         const auto roleRect =
             D2D1::RectF(innerLeft, innerTop - 14.0f, innerRight, innerTop + 2.0f);
+        ID2D1SolidColorBrush* roleBrush =
+            highlighted && accentBrush ? accentBrush : gridBrush;
         target->DrawText(role.c_str(), static_cast<UINT32>(role.size()),
-                         textFormat, roleRect, gridBrush);
+                         textFormat, roleRect, roleBrush);
     }
 
     if (!accentBrush) {
@@ -272,17 +349,20 @@ void FlowDiagramNode::drawBody(ID2D1HwndRenderTarget* target,
     D2D1_RECT_F highShelf = D2D1::RectF(innerLeft + width * 0.7f,
                                         innerTop + height * 0.35f, innerRight, innerBottom);
 
-    target->DrawRectangle(lowShelf, accentBrush, 1.5f);
-    target->DrawRectangle(midPeak, accentBrush, 1.5f);
-    target->DrawRectangle(highShelf, accentBrush, 1.5f);
+    const float thickness = highlighted ? 2.2f : 1.5f;
+    target->DrawRectangle(lowShelf, accentBrush, thickness);
+    target->DrawRectangle(midPeak, accentBrush, thickness);
+    target->DrawRectangle(highShelf, accentBrush, thickness);
 }
 
 void FlowDiagramNode::drawRoom(ID2D1HwndRenderTarget* target,
                                ID2D1SolidColorBrush* panelBrush,
+                               ID2D1SolidColorBrush* textBrush,
                                ID2D1SolidColorBrush* gridBrush,
                                ID2D1SolidColorBrush* accentBrush,
                                IDWriteTextFormat* textFormat,
-                               const D2D1_RECT_F& rect) {
+                               const D2D1_RECT_F& rect,
+                               bool highlighted) {
     if (!target || !textFormat) {
         return;
     }
@@ -291,8 +371,10 @@ void FlowDiagramNode::drawRoom(ID2D1HwndRenderTarget* target,
         D2D1::RectF(rect.left + padding, rect.top + padding,
                     rect.right - padding, rect.top + padding + 18.0f);
     const std::wstring title = L"ROOM / OUTPUT";
+    ID2D1SolidColorBrush* titleBrush =
+        textBrush ? textBrush : (gridBrush ? gridBrush : accentBrush);
     target->DrawText(title.c_str(), static_cast<UINT32>(title.size()),
-                     textFormat, titleRect, gridBrush ? gridBrush : accentBrush);
+                     textFormat, titleRect, titleBrush);
 
     const float innerTop = titleRect.bottom + 4.0f;
     const float innerBottom = rect.bottom - padding;
@@ -303,8 +385,10 @@ void FlowDiagramNode::drawRoom(ID2D1HwndRenderTarget* target,
         const std::wstring role = L"shared";
         const auto roleRect =
             D2D1::RectF(innerLeft, innerTop - 14.0f, innerRight, innerTop + 2.0f);
+        ID2D1SolidColorBrush* roleBrush =
+            highlighted && accentBrush ? accentBrush : gridBrush;
         target->DrawText(role.c_str(), static_cast<UINT32>(role.size()),
-                         textFormat, roleRect, gridBrush);
+                         textFormat, roleRect, roleBrush);
     }
 
     waveformView_.setBounds(
@@ -316,7 +400,7 @@ void FlowDiagramNode::drawRoom(ID2D1HwndRenderTarget* target,
 
     if (accentBrush) {
         const float room = std::clamp(state_.roomAmount, 0.0f, 1.0f);
-        const float barWidth = 6.0f;
+        const float barWidth = highlighted ? 8.0f : 6.0f;
         const float barHeight = (innerBottom - innerTop) * (0.2f + 0.6f * room);
         const float x = innerRight - barWidth - 2.0f;
         const float y = innerBottom - barHeight;

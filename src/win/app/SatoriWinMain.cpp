@@ -61,7 +61,9 @@ public:
 
 private:
     winui::UIModel buildUIModel();
+    winui::FlowDiagramState buildDiagramState() const;
     void refreshUI();
+    void refreshFlowDiagram();
     void updateAudioStatus(bool showDialog);
     void updatePresetStatus(const std::wstring& text);
     void syncSynthConfig();
@@ -131,6 +133,26 @@ void SatoriAppState::shutdown() {
     window_ = nullptr;
 }
 
+winui::FlowDiagramState SatoriAppState::buildDiagramState() const {
+    winui::FlowDiagramState diagram{};
+    diagram.decay = synthConfig_.decay;
+    diagram.brightness = synthConfig_.brightness;
+    diagram.dispersionAmount = synthConfig_.dispersionAmount;
+    diagram.pickPosition = synthConfig_.pickPosition;
+    diagram.bodyTone = synthConfig_.bodyTone;
+    diagram.roomAmount = synthConfig_.roomAmount;
+    diagram.noiseType =
+        (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
+    diagram.highlightedModule = winui::FlowModule::kNone;
+    return diagram;
+}
+
+void SatoriAppState::refreshFlowDiagram() {
+    if (d2d_) {
+        d2d_->updateDiagramState(buildDiagramState());
+    }
+}
+
 winui::UIModel SatoriAppState::buildUIModel() {
     winui::UIModel model;
     model.status.primary = audioStatus_;
@@ -138,14 +160,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.waveformSamples = waveformSamples_;
     model.audioOnline = audioReady_;
     model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
-    model.diagram.decay = synthConfig_.decay;
-    model.diagram.brightness = synthConfig_.brightness;
-    model.diagram.dispersionAmount = synthConfig_.dispersionAmount;
-    model.diagram.pickPosition = synthConfig_.pickPosition;
-    model.diagram.bodyTone = synthConfig_.bodyTone;
-    model.diagram.roomAmount = synthConfig_.roomAmount;
-    model.diagram.noiseType =
-        (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
+    model.diagram = buildDiagramState();
 
     auto addSlider = [&](const std::wstring& label, float min, float max,
                          float& field) {
@@ -226,6 +241,7 @@ void SatoriAppState::syncSynthConfig() {
         masterGain_ = engine_->masterGain();
         ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);
     }
+    refreshFlowDiagram();
 }
 
 std::vector<float> SatoriAppState::generateWaveform(double frequency) {
