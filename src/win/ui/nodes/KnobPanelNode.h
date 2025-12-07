@@ -17,7 +17,10 @@ class KnobPanelNode : public UILayoutNode {
 public:
     KnobPanelNode();
 
-    void setDescriptors(const std::vector<SliderDescriptor>& descriptors);
+    void setModules(const std::vector<ModuleUI>& modules,
+                    bool surfaceOnly,
+                    bool compactLayout);
+    void setExternalHighlight(std::optional<FlowModule> module);
     void syncKnobs();
 
     float preferredHeight(float) const override;
@@ -33,9 +36,10 @@ public:
 
 private:
     struct KnobEntry {
-        SliderDescriptor descriptor;
+        ModuleParamDescriptor descriptor;
         std::shared_ptr<ParameterKnob> knob;
         FlowModule module = FlowModule::kNone;
+        bool isSurface = false;
     };
 
     struct Group {
@@ -46,11 +50,20 @@ private:
     };
 
     std::vector<Group> groups_;
-    float minHeight_ = 200.0f;
+    float minHeight_ = 240.0f;
     float groupSpacing_ = 16.0f;
     float padding_ = 8.0f;
+    bool compactLayout_ = false;
+    bool surfaceOnly_ = true;
+    std::optional<FlowModule> externalHighlight_;
+    std::optional<FlowModule> hoverModule_;
+    std::optional<FlowModule> draggingModule_;
+    std::size_t maxColumns_ = 3;
 
-    void rebuildGroups(const std::vector<SliderDescriptor>& descriptors);
-};
+    void rebuildGroups(const std::vector<ModuleUI>& modules);
+    std::size_t effectiveColumns(std::size_t knobCount) const;
+    std::optional<FlowModule> currentHighlight() const;
+    bool updateHoverModule(float x, float y);
+    };
 
 }  // namespace winui

@@ -7,6 +7,12 @@
 
 namespace winui {
 
+namespace {
+bool ContainsPoint(const D2D1_RECT_F& rect, float x, float y) {
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+}  // namespace
+
 FlowDiagramNode::FlowDiagramNode() = default;
 
 void FlowDiagramNode::setDiagramState(const FlowDiagramState& state) {
@@ -19,6 +25,11 @@ void FlowDiagramNode::setHighlightedModule(FlowModule module) {
 
 void FlowDiagramNode::setWaveformSamples(const std::vector<float>& samples) {
     waveformView_.setSamples(samples);
+}
+
+void FlowDiagramNode::setOnModuleSelected(
+    std::function<void(FlowModule)> callback) {
+    onModuleSelected_ = std::move(callback);
 }
 
 float FlowDiagramNode::preferredHeight(float) const {
@@ -73,6 +84,10 @@ void FlowDiagramNode::draw(const RenderResources& resources) {
     D2D1_RECT_F roomRect = D2D1::RectF(
         bodyRect.right + gap, innerTop,
         bodyRect.right + gap + moduleWidth, innerTop + moduleHeight);
+    excitationRect_ = excitationRect;
+    stringRect_ = stringRect;
+    bodyRect_ = bodyRect;
+    roomRect_ = roomRect;
 
     const bool highlightExcitation =
         state_.highlightedModule == FlowModule::kExcitation;
@@ -407,6 +422,34 @@ void FlowDiagramNode::drawRoom(ID2D1HwndRenderTarget* target,
         D2D1_RECT_F roomBar = D2D1::RectF(x, y, x + barWidth, innerBottom);
         target->FillRectangle(roomBar, accentBrush);
     }
+}
+
+std::optional<FlowModule> FlowDiagramNode::hitTestModule(float x,
+                                                         float y) const {
+    if (ContainsPoint(excitationRect_, x, y)) {
+        return FlowModule::kExcitation;
+    }
+    if (ContainsPoint(stringRect_, x, y)) {
+        return FlowModule::kString;
+    }
+    if (ContainsPoint(bodyRect_, x, y)) {
+        return FlowModule::kBody;
+    }
+    if (ContainsPoint(roomRect_, x, y)) {
+        return FlowModule::kRoom;
+    }
+    return std::nullopt;
+}
+
+bool FlowDiagramNode::onPointerDown(float x, float y) {
+    if (!onModuleSelected_) {
+        return false;
+    }
+    if (auto module = hitTestModule(x, y)) {
+        onModuleSelected_(*module);
+        return true;
+    }
+    return false;
 }
 
 }  // namespace winui

@@ -2,6 +2,7 @@
 #include <windowsx.h>
 
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <sstream>
@@ -85,6 +86,7 @@ private:
     synthesis::StringConfig synthConfig_{};
     float masterGain_ = 1.0f;
     float ampRelease_ = 0.35f;
+    winui::UIMode uiMode_ = winui::UIMode::Play;
     bool audioReady_ = false;
     std::wstring audioStatus_ = L"音频：未初始化";
     std::wstring presetStatus_ = L"预设：默认";
@@ -155,6 +157,7 @@ void SatoriAppState::refreshFlowDiagram() {
 
 winui::UIModel SatoriAppState::buildUIModel() {
     winui::UIModel model;
+    model.mode = uiMode_;
     model.status.primary = audioStatus_;
     model.status.secondary = presetStatus_;
     model.waveformSamples = waveformSamples_;
@@ -162,29 +165,219 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
     model.diagram = buildDiagramState();
 
-    auto addSlider = [&](const std::wstring& label, float min, float max,
-                         float& field) {
-        winui::SliderDescriptor desc;
+    auto addButton = [&](const std::wstring& label, std::function<void()> onClick) {
+        model.buttons.push_back(winui::ButtonDescriptor{label, std::move(onClick)});
+    };
+
+    addButton(L"演奏", [this]() {
+        if (uiMode_ != winui::UIMode::Play) {
+            uiMode_ = winui::UIMode::Play;
+            refreshUI();
+        }
+    });
+    addButton(L"内部", [this]() {
+        if (uiMode_ != winui::UIMode::Internal) {
+            uiMode_ = winui::UIMode::Internal;
+            refreshUI();
+        }
+    });
+    addButton(L"载入预设", [this]() { handleLoadPreset(); });
+    addButton(L"保存预设", [this]() { handleSavePreset(); });
+
+    auto makeModule = [](std::wstring title, winui::FlowModule module,
+                         bool shared) {
+        winui::ModuleUI ui;
+        ui.title = std::move(title);
+        ui.module = module;
+        ui.isShared = shared;
+        return ui;
+    };
+
+    auto makeParam = [&](const std::wstring& label, float min, float max,
+                         std::function<float()> getter,
+                         std::function<void(float)> setter,
+                         winui::FlowModule module, bool surface) {
+        winui::ModuleParamDescriptor desc;
         desc.label = label;
         desc.min = min;
         desc.max = max;
-        desc.getter = [&field]() { return field; };
-        desc.setter = [this, &field](float value) {
-            field = value;
-            syncSynthConfig();
-            refreshWaveformPreview();
-        };
-        model.sliders.push_back(std::move(desc));
+        desc.getter = std::move(getter);
+        desc.setter = std::move(setter);
+        desc.module = module;
+        desc.isSurfaceParam = surface;
+        return desc;
     };
-    addSlider(L"Decay", 0.90f, 0.999f, synthConfig_.decay);
-    addSlider(L"Brightness", 0.0f, 1.0f, synthConfig_.brightness);
-    addSlider(L"Dispersion", 0.0f, 1.0f, synthConfig_.dispersionAmount);
-    addSlider(L"Excite Color", 0.0f, 1.0f, synthConfig_.excitationBrightness);
-    addSlider(L"Excite Dyn", 0.0f, 1.0f, synthConfig_.excitationVelocity);
-    addSlider(L"Pick Position", 0.05f, 0.95f, synthConfig_.pickPosition);
-    addSlider(L"Body Tone", 0.0f, 1.0f, synthConfig_.bodyTone);
-    addSlider(L"Body Size", 0.0f, 1.0f, synthConfig_.bodySize);
-    addSlider(L"Room Amount", 0.0f, 1.0f, synthConfig_.roomAmount);
+
+    std::vector<winui::ModuleUI> modules;
+
+    winui::ModuleUI excitation =
+        makeModule(L"EXCITATION", winui::FlowModule::kExcitation, false);
+    excitation.params.push_back(
+        makeParam(L"Noise Type", 0.0f, 1.0f,
+                  [this]() {
+                      return synthConfig_.noiseType == synthesis::NoiseType::Binary
+                                 ? 1.0f
+                                 : 0.0f;
+                  },
+                  [this](float value) {
+                      synthConfig_.noiseType = (value >= 0.5f)
+                                                   ? synthesis::NoiseType::Binary
+                                                   : synthesis::NoiseType::White;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, true));
+    excitation.params.push_back(
+        makeParam(L"Excite Color", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.excitationBrightness; },
+                  [this](float value) {
+                      synthConfig_.excitationBrightness = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, true));
+    excitation.params.push_back(
+        makeParam(L"Excite Dyn", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.excitationVelocity; },
+                  [this](float value) {
+                      synthConfig_.excitationVelocity = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, true));
+    excitation.params.push_back(
+        makeParam(L"Pick Position", 0.05f, 0.95f,
+                  [this]() { return synthConfig_.pickPosition; },
+                  [this](float value) {
+                      synthConfig_.pickPosition = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, true));
+    excitation.params.push_back(
+        makeParam(L"Excite Mode", 0.0f, 1.0f,
+                  [this]() {
+                      return synthConfig_.excitationMode ==
+                                     synthesis::ExcitationMode::FixedNoisePick
+                                 ? 1.0f
+                                 : 0.0f;
+                  },
+                  [this](float value) {
+                      synthConfig_.excitationMode =
+                          (value >= 0.5f)
+                              ? synthesis::ExcitationMode::FixedNoisePick
+                              : synthesis::ExcitationMode::RandomNoisePick;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, false));
+    excitation.params.push_back(
+        makeParam(L"Excite Seed", 0.0f, 10000.0f,
+                  [this]() { return static_cast<float>(synthConfig_.seed); },
+                  [this](float value) {
+                      value = std::clamp(value, 0.0f, 10000.0f);
+                      synthConfig_.seed =
+                          static_cast<unsigned int>(std::round(value));
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, false));
+    modules.push_back(std::move(excitation));
+
+    winui::ModuleUI stringModule =
+        makeModule(L"STRING LOOP", winui::FlowModule::kString, false);
+    stringModule.params.push_back(
+        makeParam(L"Decay", 0.90f, 0.999f,
+                  [this]() { return synthConfig_.decay; },
+                  [this](float value) {
+                      synthConfig_.decay = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kString, true));
+    stringModule.params.push_back(
+        makeParam(L"Brightness", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.brightness; },
+                  [this](float value) {
+                      synthConfig_.brightness = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kString, true));
+    stringModule.params.push_back(
+        makeParam(L"Dispersion", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.dispersionAmount; },
+                  [this](float value) {
+                      synthConfig_.dispersionAmount = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kString, true));
+    stringModule.params.push_back(
+        makeParam(L"Lowpass", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.enableLowpass ? 1.0f : 0.0f; },
+                  [this](float value) {
+                      synthConfig_.enableLowpass = value >= 0.5f;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kString, false));
+    modules.push_back(std::move(stringModule));
+
+    winui::ModuleUI bodyModule =
+        makeModule(L"BODY", winui::FlowModule::kBody, true);
+    bodyModule.params.push_back(
+        makeParam(L"Body Tone", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.bodyTone; },
+                  [this](float value) {
+                      synthConfig_.bodyTone = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kBody, true));
+    bodyModule.params.push_back(
+        makeParam(L"Body Size", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.bodySize; },
+                  [this](float value) {
+                      synthConfig_.bodySize = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kBody, true));
+    modules.push_back(std::move(bodyModule));
+
+    winui::ModuleUI roomModule =
+        makeModule(L"ROOM", winui::FlowModule::kRoom, true);
+    roomModule.params.push_back(
+        makeParam(L"Room Amount", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.roomAmount; },
+                  [this](float value) {
+                      synthConfig_.roomAmount = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kRoom, true));
+    roomModule.params.push_back(
+        makeParam(L"Master Gain", 0.0f, 2.0f,
+                  [this]() { return masterGain_; },
+                  [this](float value) {
+                      masterGain_ = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kRoom, false));
+    roomModule.params.push_back(
+        makeParam(L"Amp Release", 0.01f, 5.0f,
+                  [this]() { return ampRelease_; },
+                  [this](float value) {
+                      ampRelease_ = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kRoom, false));
+    modules.push_back(std::move(roomModule));
+
+    model.modules = std::move(modules);
 
     model.keyboardConfig.baseMidiNote = kKeyboardBaseMidiNote;
     model.keyboardConfig.octaveCount = kKeyboardOctaveCount;

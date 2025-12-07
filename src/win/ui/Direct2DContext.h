@@ -25,11 +25,14 @@ namespace winui {
 
 class UILayoutNode;
 class UIStackPanel;
+class UIHorizontalStack;
 class UIOverlay;
 class TopBarNode;
 class FlowDiagramNode;
 class KnobPanelNode;
+class ButtonBarNode;
 class KeyboardNode;
+class WaveformNode;
 
 class Direct2DContext {
 public:
@@ -112,8 +115,13 @@ private:
 #endif
     std::shared_ptr<UILayoutNode> rootLayout_;
     std::shared_ptr<TopBarNode> topBarNode_;
+    std::shared_ptr<ButtonBarNode> buttonBarNode_;
+    std::shared_ptr<UIHorizontalStack> mainRow_;
+    std::shared_ptr<UILayoutNode> leftColumn_;
+    std::shared_ptr<UILayoutNode> rightColumn_;
     std::shared_ptr<FlowDiagramNode> flowNode_;
     std::shared_ptr<KnobPanelNode> knobPanelNode_;
+    std::shared_ptr<WaveformNode> waveformNode_;
     std::shared_ptr<KeyboardNode> keyboardNode_;
     KeyboardColors keyboardColors_{};
 };

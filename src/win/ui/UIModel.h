@@ -6,6 +6,8 @@
 
 namespace winui {
 
+enum class UIMode { Play, Internal };
+
 struct ButtonDescriptor {
     std::wstring label;
     std::function<void()> onClick;
@@ -50,11 +52,30 @@ struct FlowDiagramState {
     FlowModule highlightedModule = FlowModule::kNone;
 };
 
+struct ModuleParamDescriptor {
+    std::wstring label;
+    float min = 0.0f;
+    float max = 1.0f;
+    std::function<float()> getter;
+    std::function<void(float)> setter;
+    FlowModule module = FlowModule::kNone;
+    bool isSurfaceParam = false;
+};
+
+struct ModuleUI {
+    std::wstring title;
+    FlowModule module = FlowModule::kNone;
+    bool isShared = false;
+    std::vector<ModuleParamDescriptor> params;
+};
+
 struct UIModel {
     std::vector<std::wstring> instructions;
+    UIMode mode = UIMode::Play;
     StatusInfo status;
     std::vector<ButtonDescriptor> buttons;
     std::vector<SliderDescriptor> sliders;
+    std::vector<ModuleUI> modules;
     KeyboardConfig keyboardConfig;
     std::function<void(int, double, bool)> keyCallback;
     std::vector<float> waveformSamples;

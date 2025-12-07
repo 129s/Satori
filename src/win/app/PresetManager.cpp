@@ -72,6 +72,29 @@ bool ParseBool(const std::string& raw, bool& ok) {
     return false;
 }
 
+unsigned int ParseUint(const std::string& raw, bool& ok) {
+    try {
+        ok = true;
+        return static_cast<unsigned int>(std::stoul(raw));
+    } catch (const std::exception&) {
+        ok = false;
+        return 0;
+    }
+}
+
+synthesis::ExcitationMode ParseExcitationMode(const std::string& raw, bool& ok) {
+    const auto lower = ToLower(raw);
+    ok = true;
+    if (lower == "fixed") {
+        return synthesis::ExcitationMode::FixedNoisePick;
+    }
+    if (lower == "random") {
+        return synthesis::ExcitationMode::RandomNoisePick;
+    }
+    ok = false;
+    return synthesis::ExcitationMode::RandomNoisePick;
+}
+
 }  // namespace
 
 PresetManager::PresetManager(std::filesystem::path presetDir)
@@ -235,7 +258,25 @@ bool PresetManager::parse(const std::string& content,
         params.setParam(engine::ParamId::AmpRelease, value);
     }
 
-    config = params.stringConfig();
+    synthesis::StringConfig parsedConfig = params.stringConfig();
+
+    if (auto excitationMode = ExtractValue(content, "excitationMode")) {
+        const auto mode = ParseExcitationMode(*excitationMode, ok);
+        if (!ok) {
+            errorMessage = L"解析 excitationMode 失败";
+            return false;
+        }
+        parsedConfig.excitationMode = mode;
+    }
+    if (auto seed = ExtractValue(content, "seed")) {
+        parsedConfig.seed = ParseUint(*seed, ok);
+        if (!ok) {
+            errorMessage = L"解析 seed 失败";
+            return false;
+        }
+    }
+
+    config = parsedConfig;
     masterGain = params.getParam(engine::ParamId::MasterGain);
     ampRelease = params.getParam(engine::ParamId::AmpRelease);
     return true;
@@ -258,6 +299,11 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")
         << "\",\n"
+        << "  \"excitationMode\": \""
+        << (config.excitationMode == synthesis::ExcitationMode::FixedNoisePick ? "fixed"
+                                                                                : "random")
+        << "\",\n"
+        << "  \"seed\": " << config.seed << ",\n"
         << "  \"masterGain\": " << masterGain << ",\n"
         << "  \"ampRelease\": " << ampRelease << "\n"
         << "}\n";

@@ -12,9 +12,12 @@
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
 #include "win/ui/nodes/FlowDiagramNode.h"
+#include "win/ui/nodes/ButtonBarNode.h"
 #include "win/ui/nodes/KnobPanelNode.h"
 #include "win/ui/nodes/KeyboardNode.h"
 #include "win/ui/nodes/TopBarNode.h"
+#include "win/ui/nodes/WaveformNode.h"
+#include "win/ui/layout/UIHorizontalStack.h"
 #include "win/ui/layout/UIStackPanel.h"
 
 namespace winui {
@@ -199,6 +202,9 @@ void Direct2DContext::updateWaveformSamples(
     if (flowNode_) {
         flowNode_->setWaveformSamples(samples);
     }
+    if (waveformNode_) {
+        waveformNode_->setSamples(samples);
+    }
 }
 
 void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
@@ -344,8 +350,14 @@ void Direct2DContext::dumpLayoutDebugInfo() {
     if (topBarNode_) {
         output << L"  topbar    " << formatRect(topBarNode_->bounds()) << L"\n";
     }
+    if (buttonBarNode_) {
+        output << L"  buttons   " << formatRect(buttonBarNode_->bounds()) << L"\n";
+    }
     if (flowNode_) {
         output << L"  flow      " << formatRect(flowNode_->bounds()) << L"\n";
+    }
+    if (waveformNode_) {
+        output << L"  waveform  " << formatRect(waveformNode_->bounds()) << L"\n";
     }
     if (knobPanelNode_) {
         output << L"  knobs     " << formatRect(knobPanelNode_->bounds())
@@ -546,32 +558,67 @@ void Direct2DContext::rebuildLayout() {
     topBar->setSecondaryStatusText(model_.status.secondary);
     topBarNode_ = topBar;
 
+    buttonBarNode_.reset();
+    if (!model_.buttons.empty()) {
+        auto buttonBar = std::make_shared<ButtonBarNode>();
+        buttonBar->setButtons(model_.buttons);
+        buttonBarNode_ = buttonBar;
+    }
+
     flowNode_ = std::make_shared<FlowDiagramNode>();
     flowNode_->setDiagramState(model_.diagram);
     flowNode_->setWaveformSamples(model_.waveformSamples);
+    flowNode_->setOnModuleSelected([this](FlowModule module) {
+        if (knobPanelNode_) {
+            knobPanelNode_->setExternalHighlight(module);
+            layoutDirty_ = true;
+        }
+    });
 
     knobPanelNode_ = std::make_shared<KnobPanelNode>();
-    knobPanelNode_->setDescriptors(model_.sliders);
+    knobPanelNode_->setModules(model_.modules,
+                               model_.mode == UIMode::Play,
+                               model_.mode == UIMode::Internal);
 #if SATORI_UI_DEBUG_ENABLED
     applyDebugOverlayState();
 #endif
+
+    waveformNode_ = std::make_shared<WaveformNode>();
+    waveformNode_->setSamples(model_.waveformSamples);
 
     keyboardNode_ = std::make_shared<KeyboardNode>();
     keyboardNode_->setColors(keyboardColors_);
     keyboardNode_->setConfig(model_.keyboardConfig, model_.keyCallback);
 
-    auto mainStack = std::make_shared<UIStackPanel>(8.0f);
-    mainStack->setItems({
-        {flowNode_, {UISizeMode::kPercent, 0.55f, 260.0f}},
-        {knobPanelNode_, {UISizeMode::kPercent, 0.45f, 200.0f}},
+    auto leftStack = std::make_shared<UIStackPanel>(8.0f);
+    leftStack->setItems({
+        {flowNode_, {UISizeMode::kAuto, 0.0f, 240.0f}},
+        {knobPanelNode_, {UISizeMode::kAuto, 0.0f, 220.0f}},
     });
+    leftColumn_ = leftStack;
+
+    auto rightStack = std::make_shared<UIStackPanel>(8.0f);
+    rightStack->setItems({
+        {waveformNode_, {UISizeMode::kAuto, 0.0f, 160.0f}},
+    });
+    rightColumn_ = rightStack;
+
+    auto mainRow = std::make_shared<UIHorizontalStack>(8.0f);
+    mainRow->setItems({
+        {leftStack, {UISizeMode::kPercent, 0.62f, 320.0f}},
+        {rightStack, {UISizeMode::kPercent, 0.38f, 160.0f}},
+    });
+    mainRow_ = mainRow;
 
     auto rootStack = std::make_shared<UIStackPanel>(8.0f);
-    rootStack->setItems({
-        {topBar, {UISizeMode::kAuto, 0.0f, 40.0f}},
-        {mainStack, {UISizeMode::kAuto, 0.0f, 400.0f}},
-        {keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}},
-    });
+    std::vector<UIStackPanel::Item> items;
+    items.push_back({topBar, {UISizeMode::kAuto, 0.0f, 52.0f}});
+    if (buttonBarNode_) {
+        items.push_back({buttonBarNode_, {UISizeMode::kAuto, 0.0f, 44.0f}});
+    }
+    items.push_back({mainRow, {UISizeMode::kAuto, 0.0f, 420.0f}});
+    items.push_back({keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}});
+    rootStack->setItems(std::move(items));
 
     rootLayout_ = rootStack;
     layoutDirty_ = true;
@@ -681,6 +728,11 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
     if (keyboardNode_) {
         if (auto keyboardSelection = checkNode(keyboardNode_)) {
             return keyboardSelection;
+        }
+    }
+    if (waveformNode_) {
+        if (auto waveSelection = checkNode(waveformNode_)) {
+            return waveSelection;
         }
     }
     if (auto flowSelection = checkNode(flowNode_)) {

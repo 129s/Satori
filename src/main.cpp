@@ -31,6 +31,8 @@ struct AppConfig {
     float roomAmount = 0.0f;
     bool enableLowpass = true;
     synthesis::NoiseType noiseType = synthesis::NoiseType::White;
+    synthesis::ExcitationMode excitationMode =
+        synthesis::ExcitationMode::RandomNoisePick;
     unsigned int seed = 0;
     float ampRelease = 0.35f;
     std::filesystem::path output = "satori_demo.wav";
@@ -40,7 +42,8 @@ void printUsage() {
     std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
                  "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--pickpos 0.5] "
-                 "[--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] [--noise white|binary] [--filter lowpass|none] "
+                 "[--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] [--noise white|binary] "
+                 "[--excitation random|fixed] [--filter lowpass|none] "
                  "[--release 0.35] [--seed 1234] [--output out.wav]\n";
 }
 
@@ -117,6 +120,16 @@ void parseNoise(const std::string& value, synthesis::NoiseType& dest) {
         dest = synthesis::NoiseType::Binary;
     } else {
         dest = synthesis::NoiseType::White;
+    }
+}
+
+void parseExcitationMode(const std::string& value,
+                         synthesis::ExcitationMode& dest) {
+    const auto lower = toLower(value);
+    if (lower == "fixed") {
+        dest = synthesis::ExcitationMode::FixedNoisePick;
+    } else {
+        dest = synthesis::ExcitationMode::RandomNoisePick;
     }
 }
 
@@ -205,6 +218,9 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     }
     if (auto it = kv.find("noise"); it != kv.end()) {
         parseNoise(it->second, config.noiseType);
+    }
+    if (auto it = kv.find("excitation"); it != kv.end()) {
+        parseExcitationMode(it->second, config.excitationMode);
     }
     if (auto it = kv.find("filter"); it != kv.end()) {
         config.enableLowpass = toLower(it->second) != "none";
@@ -331,6 +347,7 @@ int main(int argc, char** argv) {
 
     synthesis::StringConfig synthConfig = synthEngine.stringConfig();
     synthConfig.seed = appConfig.seed;
+    synthConfig.excitationMode = appConfig.excitationMode;
     synthEngine.setConfig(synthConfig);
 
     std::vector<synthesis::NoteEvent> noteSequence = appConfig.notes;

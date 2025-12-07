@@ -11,6 +11,7 @@ class FilterChain;
 namespace synthesis {
 
 enum class NoiseType { White, Binary };
+enum class ExcitationMode { RandomNoisePick, FixedNoisePick };
 
 struct StringConfig {
     double sampleRate = 44100.0;
@@ -26,6 +27,7 @@ struct StringConfig {
     NoiseType noiseType = NoiseType::White;
     bool enableLowpass = true;
     unsigned int seed = 0;  // 随机噪声种子，0 表示使用 random_device
+    ExcitationMode excitationMode = ExcitationMode::RandomNoisePick;
 };
 
 class KarplusStrongString {
@@ -48,7 +50,7 @@ public:
     float lastOutput() const { return lastOutput_; }
 
     const StringConfig& config() const { return config_; }
-    void updateConfig(const StringConfig& config) { config_ = config; configureFilters(); }
+    void updateConfig(const StringConfig& config);
 
 private:
     void fillExcitationNoise();

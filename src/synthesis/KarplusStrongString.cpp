@@ -27,6 +27,17 @@ KarplusStrongString::KarplusStrongString(StringConfig config)
     configureFilters();
 }
 
+void KarplusStrongString::updateConfig(const StringConfig& config) {
+    config_ = config;
+    if (config_.seed != 0) {
+        rngSeed_ = config_.seed;
+    } else if (rngSeed_ == 0) {
+        std::random_device rd;
+        rngSeed_ = rd();
+    }
+    configureFilters();
+}
+
 KarplusStrongString::~KarplusStrongString() = default;
 
 KarplusStrongString::KarplusStrongString(KarplusStrongString&&) noexcept = default;
@@ -64,7 +75,11 @@ std::vector<float> KarplusStrongString::pluck(double frequency,
 
 void KarplusStrongString::fillExcitationNoise() {
     std::mt19937 rng(rngSeed_);
-    rngSeed_ = rng();  // 更新种子，保证下一次拨弦有新噪声
+    const bool randomMode =
+        config_.excitationMode == ExcitationMode::RandomNoisePick;
+    if (randomMode) {
+        rngSeed_ = rng();  // 更新种子，保证下一次拨弦有新噪声
+    }
 
     std::uniform_real_distribution<float> uniform(-1.0f, 1.0f);
     std::bernoulli_distribution binary(0.5);

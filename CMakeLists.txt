@@ -60,6 +60,7 @@ if (WIN32)
         src/win/ui/Direct2DContext.cpp
         src/win/ui/KeyboardKeymap.cpp
         src/win/ui/layout/UIStackPanel.cpp
+        src/win/ui/layout/UIHorizontalStack.cpp
         src/win/ui/layout/UIOverlay.cpp
         src/win/ui/nodes/ButtonBarNode.cpp
         src/win/ui/nodes/HeaderNode.cpp

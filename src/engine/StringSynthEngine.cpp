@@ -468,6 +468,7 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.sampleRate = config.sampleRate;
     config_.seed = config.seed;
+    config_.excitationMode = config.excitationMode;
     applyParamUnlocked(ParamId::Decay, static_cast<float>(config.decay), config_,
                        masterGain_);
     applyParamUnlocked(ParamId::Brightness, config.brightness, config_, masterGain_);

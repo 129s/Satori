@@ -49,29 +49,23 @@ DebugBoxModel MakeGroupBox(const D2D1_RECT_F& bounds,
     return model;
 }
 
-FlowModule ModuleFromLabel(const std::wstring& label) {
-    if (label == L"Pick Position" || label == L"Excite Color" ||
-        label == L"Excite Dyn") {
-        return FlowModule::kExcitation;
-    }
-    if (label == L"Decay" || label == L"Brightness" || label == L"Dispersion") {
-        return FlowModule::kString;
-    }
-    if (label == L"Body Tone" || label == L"Body Size") {
-        return FlowModule::kBody;
-    }
-    if (label == L"Room Amount") {
-        return FlowModule::kRoom;
-    }
-    return FlowModule::kNone;
-}
 }  // namespace
 
 KnobPanelNode::KnobPanelNode() = default;
 
-void KnobPanelNode::setDescriptors(
-    const std::vector<SliderDescriptor>& descriptors) {
-    rebuildGroups(descriptors);
+void KnobPanelNode::setModules(const std::vector<ModuleUI>& modules,
+                               bool surfaceOnly,
+                               bool compactLayout) {
+    surfaceOnly_ = surfaceOnly;
+    compactLayout_ = compactLayout;
+    maxColumns_ = compactLayout_ ? 4 : 3;
+    hoverModule_.reset();
+    draggingModule_.reset();
+    rebuildGroups(modules);
+}
+
+void KnobPanelNode::setExternalHighlight(std::optional<FlowModule> module) {
+    externalHighlight_ = module;
 }
 
 void KnobPanelNode::syncKnobs() {
@@ -85,7 +79,7 @@ void KnobPanelNode::syncKnobs() {
 }
 
 float KnobPanelNode::preferredHeight(float) const {
-    return minHeight_;
+    return compactLayout_ ? (minHeight_ + 60.0f) : minHeight_;
 }
 
 void KnobPanelNode::arrange(const D2D1_RECT_F& bounds) {
@@ -122,7 +116,8 @@ void KnobPanelNode::arrange(const D2D1_RECT_F& bounds) {
             continue;
         }
 
-        const std::size_t columns = std::min<std::size_t>(knobCount, 3);
+        const std::size_t columns =
+            std::min<std::size_t>(knobCount, effectiveColumns(knobCount));
         const std::size_t rows =
             static_cast<std::size_t>((knobCount + columns - 1) / columns);
 
@@ -198,6 +193,8 @@ bool KnobPanelNode::onPointerDown(float x, float y) {
     for (auto& group : groups_) {
         for (auto& entry : group.knobs) {
             if (entry.knob && entry.knob->onPointerDown(x, y)) {
+                draggingModule_ = entry.module;
+                hoverModule_ = entry.module;
                 return true;
             }
         }
@@ -214,7 +211,8 @@ bool KnobPanelNode::onPointerMove(float x, float y) {
             }
         }
     }
-    return handled;
+    const bool hoverChanged = updateHoverModule(x, y);
+    return handled || hoverChanged;
 }
 
 void KnobPanelNode::onPointerUp() {
@@ -225,6 +223,7 @@ void KnobPanelNode::onPointerUp() {
             }
         }
     }
+    draggingModule_.reset();
 }
 
 std::optional<DebugBoxModel> KnobPanelNode::debugBoxForPoint(float x,
@@ -253,78 +252,38 @@ std::optional<DebugBoxModel> KnobPanelNode::debugBoxForPoint(float x,
     return std::nullopt;
 }
 
-void KnobPanelNode::rebuildGroups(
-    const std::vector<SliderDescriptor>& descriptors) {
+void KnobPanelNode::rebuildGroups(const std::vector<ModuleUI>& descriptors) {
     groups_.clear();
     if (descriptors.empty()) {
         return;
     }
 
-    Group excitation;
-    excitation.title = L"EXCITATION";
-    excitation.module = FlowModule::kExcitation;
-    Group stringGroup;
-    stringGroup.title = L"STRING";
-    stringGroup.module = FlowModule::kString;
-    Group bodyGroup;
-    bodyGroup.title = L"BODY";
-    bodyGroup.module = FlowModule::kBody;
-    Group roomGroup;
-    roomGroup.title = L"ROOM";
-    roomGroup.module = FlowModule::kRoom;
-    Group other;
-    other.title = L"OTHER";
-
-    auto makeEntry = [](const SliderDescriptor& desc, FlowModule module) {
-        KnobEntry entry;
-        entry.descriptor = desc;
-        entry.module = module;
-        const float initial = desc.getter ? desc.getter() : desc.min;
-        entry.knob = std::make_shared<ParameterKnob>(
-            desc.label, desc.min, desc.max, initial,
-            [setter = desc.setter](float value) {
-                if (setter) {
-                    setter(value);
-                }
-            });
-        return entry;
-    };
-
-    for (const auto& desc : descriptors) {
-        const FlowModule module = ModuleFromLabel(desc.label);
-        switch (module) {
-            case FlowModule::kExcitation:
-                excitation.knobs.push_back(makeEntry(desc, module));
-                break;
-            case FlowModule::kString:
-                stringGroup.knobs.push_back(makeEntry(desc, module));
-                break;
-            case FlowModule::kBody:
-                bodyGroup.knobs.push_back(makeEntry(desc, module));
-                break;
-            case FlowModule::kRoom:
-                roomGroup.knobs.push_back(makeEntry(desc, module));
-                break;
-            default:
-                other.knobs.push_back(makeEntry(desc, module));
-                break;
+    for (const auto& module : descriptors) {
+        Group group;
+        group.title = module.title;
+        group.module = module.module;
+        for (const auto& param : module.params) {
+            if (surfaceOnly_ && !param.isSurfaceParam) {
+                continue;
+            }
+            KnobEntry entry;
+            entry.descriptor = param;
+            entry.module = param.module == FlowModule::kNone ? module.module
+                                                             : param.module;
+            entry.isSurface = param.isSurfaceParam;
+            const float initial = param.getter ? param.getter() : param.min;
+            entry.knob = std::make_shared<ParameterKnob>(
+                param.label, param.min, param.max, initial,
+                [setter = param.setter](float value) {
+                    if (setter) {
+                        setter(value);
+                    }
+                });
+            group.knobs.push_back(std::move(entry));
         }
-    }
-
-    if (!excitation.knobs.empty()) {
-        groups_.push_back(std::move(excitation));
-    }
-    if (!stringGroup.knobs.empty()) {
-        groups_.push_back(std::move(stringGroup));
-    }
-    if (!bodyGroup.knobs.empty()) {
-        groups_.push_back(std::move(bodyGroup));
-    }
-    if (!roomGroup.knobs.empty()) {
-        groups_.push_back(std::move(roomGroup));
-    }
-    if (!other.knobs.empty()) {
-        groups_.push_back(std::move(other));
+        if (!group.knobs.empty()) {
+            groups_.push_back(std::move(group));
+        }
     }
 }
 
@@ -340,19 +299,46 @@ std::shared_ptr<ParameterKnob> KnobPanelNode::activeKnob() const {
 }
 
 std::optional<FlowModule> KnobPanelNode::activeModule() const {
+    return currentHighlight();
+}
+
+std::size_t KnobPanelNode::effectiveColumns(std::size_t knobCount) const {
+    if (knobCount == 0) {
+        return 0;
+    }
+    return std::max<std::size_t>(1, std::min<std::size_t>(knobCount, maxColumns_));
+}
+
+std::optional<FlowModule> KnobPanelNode::currentHighlight() const {
+    if (draggingModule_) {
+        return draggingModule_;
+    }
+    if (hoverModule_) {
+        return hoverModule_;
+    }
+    return externalHighlight_;
+}
+
+bool KnobPanelNode::updateHoverModule(float x, float y) {
+    auto previous = hoverModule_;
+    if (draggingModule_) {
+        return false;
+    }
+    std::optional<FlowModule> newHover;
     for (const auto& group : groups_) {
         for (const auto& entry : group.knobs) {
-            if (entry.knob && entry.knob->isDragging()) {
-                if (entry.module != FlowModule::kNone) {
-                    return entry.module;
-                }
-                if (group.module != FlowModule::kNone) {
-                    return group.module;
-                }
+            if (entry.knob && entry.knob->contains(x, y)) {
+                newHover = entry.module != FlowModule::kNone ? entry.module
+                                                             : group.module;
+                break;
             }
         }
+        if (newHover) {
+            break;
+        }
     }
-    return std::nullopt;
+    hoverModule_ = newHover;
+    return hoverModule_ != previous;
 }
 
 }  // namespace winui
