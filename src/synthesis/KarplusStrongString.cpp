@@ -73,18 +73,39 @@ std::vector<float> KarplusStrongString::pluck(double frequency,
     return outputBuffer_;
 }
 
+std::vector<float> KarplusStrongString::excitationBufferPreview(
+    std::size_t maxSamples) const {
+    if (delayBuffer_.empty()) {
+        return {};
+    }
+    std::vector<float> preview = delayBuffer_;
+    if (maxSamples > 0 && preview.size() > maxSamples) {
+        preview.resize(maxSamples);
+    }
+    return preview;
+}
+
 void KarplusStrongString::fillExcitationNoise() {
+    if (delayBuffer_.empty()) {
+        return;
+    }
+
     std::mt19937 rng(rngSeed_);
     const bool randomMode =
         config_.excitationMode == ExcitationMode::RandomNoisePick;
     if (randomMode) {
-        rngSeed_ = rng();  // 更新种子，保证下一次拨弦有新噪声
+        rngSeed_ = rng();  // Update seed so next pluck gets a new noise burst.
     }
 
     std::uniform_real_distribution<float> uniform(-1.0f, 1.0f);
     std::bernoulli_distribution binary(0.5);
 
-    for (auto& sample : delayBuffer_) {
+    const float mix = clamp01(config_.excitationMix);
+    const std::size_t n = delayBuffer_.size();
+
+    // 1) Generate noise excitation.
+    std::vector<float> noise(n, 0.0f);
+    for (auto& sample : noise) {
         switch (config_.noiseType) {
             case NoiseType::Binary:
                 sample = binary(rng) ? 1.0f : -1.0f;
@@ -93,6 +114,51 @@ void KarplusStrongString::fillExcitationNoise() {
             default:
                 sample = uniform(rng);
                 break;
+        }
+    }
+
+    // 2) Generate a plectrum-shaped impulse (short Hann bump) centered at pick position.
+    std::vector<float> impulse(n, 0.0f);
+    constexpr double kImpulseDurationSeconds = 0.005;  // ~5ms pluck transient.
+    const double sr = config_.sampleRate > 0.0 ? config_.sampleRate : 44100.0;
+    std::size_t windowLen = static_cast<std::size_t>(
+        std::round(sr * kImpulseDurationSeconds));
+    windowLen = std::max<std::size_t>(2, std::min(windowLen, n));
+
+    const float pickPos = clampPick(currentPickPosition_);
+    const std::size_t pickIndex = static_cast<std::size_t>(
+        pickPos * static_cast<float>(n - 1));
+
+    std::size_t start =
+        (pickIndex > windowLen / 2) ? pickIndex - windowLen / 2 : 0;
+    if (start + windowLen > n) {
+        start = (n > windowLen) ? (n - windowLen) : 0;
+    }
+
+    constexpr double kTwoPi = 6.283185307179586;
+    for (std::size_t i = 0; i < windowLen; ++i) {
+        const double phase =
+            (windowLen > 1)
+                ? (kTwoPi * static_cast<double>(i) /
+                   static_cast<double>(windowLen - 1))
+                : 0.0;
+        const float w =
+            static_cast<float>(0.5 - 0.5 * std::cos(phase));  // Hann window
+        impulse[start + i] = w;
+    }
+
+    // 3) Mix Noise/Impulse and remove DC.
+    float mean = 0.0f;
+    for (std::size_t i = 0; i < n; ++i) {
+        const float v = mix * noise[i] + (1.0f - mix) * impulse[i];
+        delayBuffer_[i] = v;
+        mean += v;
+    }
+    // Keep legacy behavior for pure-noise excitation to avoid unintended energy shifts.
+    if (mix < 0.999f) {
+        mean /= static_cast<float>(n);
+        for (auto& sample : delayBuffer_) {
+            sample -= mean;
         }
     }
 }
@@ -130,14 +196,14 @@ void KarplusStrongString::applyExcitationColor() {
     if (color <= 0.01f) {
         return;
     }
-    // 以一阶低通提取低频分量，高频=原始-低频，然后按色彩系数混合。
+    // Use a 1-pole lowpass to split low/high and tilt the spectrum by color.
     const float targetAlpha =
         std::clamp(0.05f + 0.4f * color, 0.01f, 0.95f);
     float state = 0.0f;
     for (auto& sample : delayBuffer_) {
         state = targetAlpha * sample + (1.0f - targetAlpha) * state;
         const float high = sample - state;
-        const float tilt = (color - 0.5f) * 1.2f;  // 负值偏暗，正值偏亮
+        const float tilt = (color - 0.5f) * 1.2f;  // Negative = darker, positive = brighter.
         const float lowGain = 1.0f - 0.4f * tilt;
         const float highGain = 1.0f + 0.6f * tilt;
         sample = state * lowGain + high * highGain;

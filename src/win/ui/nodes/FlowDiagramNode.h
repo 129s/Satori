@@ -35,6 +35,7 @@ private:
     void drawExcitation(ID2D1HwndRenderTarget* target,
                         ID2D1SolidColorBrush* textBrush,
                         ID2D1SolidColorBrush* gridBrush,
+                        ID2D1SolidColorBrush* excitationBrush,
                         ID2D1SolidColorBrush* accentBrush,
                         IDWriteTextFormat* textFormat,
                         const D2D1_RECT_F& rect,

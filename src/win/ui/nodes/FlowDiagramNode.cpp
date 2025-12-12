@@ -157,8 +157,8 @@ void FlowDiagramNode::draw(const RenderResources& resources) {
               highlightBody || highlightRoom);
 
     drawExcitation(resources.target, resources.textBrush, resources.gridBrush,
-                   resources.accentBrush, resources.textFormat, excitationRect,
-                   highlightExcitation);
+                   resources.excitationBrush, resources.accentBrush,
+                   resources.textFormat, excitationRect, highlightExcitation);
     drawString(resources.target, resources.textBrush, resources.gridBrush,
                resources.accentBrush, resources.textFormat, stringRect,
                highlightString);
@@ -173,6 +173,7 @@ void FlowDiagramNode::draw(const RenderResources& resources) {
 void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
                                      ID2D1SolidColorBrush* textBrush,
                                      ID2D1SolidColorBrush* gridBrush,
+                                     ID2D1SolidColorBrush* excitationBrush,
                                      ID2D1SolidColorBrush* accentBrush,
                                      IDWriteTextFormat* textFormat,
                                      const D2D1_RECT_F& rect,
@@ -205,28 +206,73 @@ void FlowDiagramNode::drawExcitation(ID2D1HwndRenderTarget* target,
     const float innerLeft = rect.left + padding;
     const float innerRight = rect.right - padding;
 
-    // 噪声纹理：简单的竖线阵列
-    ID2D1SolidColorBrush* textureBrush =
-        highlighted && accentBrush ? accentBrush : gridBrush;
-    if (textureBrush) {
-        const float width = innerRight - innerLeft;
-        const int lines = 12;
-        for (int i = 0; i < lines; ++i) {
-            const float x =
-                innerLeft + width * (static_cast<float>(i) / (lines - 1));
-            const float hFactor = (state_.noiseType == 0) ? 0.5f : 0.9f;
-            const float top =
-                innerTop + (1.0f - hFactor) * (innerBottom - innerTop);
-            target->DrawLine(D2D1::Point2F(x, top),
-                             D2D1::Point2F(x, innerBottom), textureBrush,
-                             highlighted ? 1.6f : 1.0f);
+    const float innerHeight = std::max(0.0f, innerBottom - innerTop);
+    const float scopeHeight = innerHeight * 0.6f;
+    const auto scopeRect = D2D1::RectF(innerLeft, innerTop, innerRight,
+                                       innerTop + scopeHeight);
+
+    // Scope label
+    if (gridBrush) {
+        const std::wstring scopeLabel = L"Transient Scope";
+        const auto scopeLabelRect =
+            D2D1::RectF(scopeRect.left + 2.0f, scopeRect.top + 2.0f,
+                        scopeRect.right - 2.0f, scopeRect.top + 16.0f);
+        const float originalOpacity = gridBrush->GetOpacity();
+        gridBrush->SetOpacity(0.65f);
+        target->DrawText(scopeLabel.c_str(),
+                         static_cast<UINT32>(scopeLabel.size()), textFormat,
+                         scopeLabelRect, gridBrush);
+        gridBrush->SetOpacity(originalOpacity);
+    }
+
+    // 绘制激励瞬态/包络线
+    const auto& samples = state_.excitationSamples;
+    ID2D1SolidColorBrush* scopeBrush =
+        excitationBrush ? excitationBrush
+                        : (accentBrush ? accentBrush : gridBrush);
+    if (scopeBrush && samples.size() >= 2) {
+        const float width = scopeRect.right - scopeRect.left;
+        const float height = scopeRect.bottom - scopeRect.top;
+        if (width > 0.0f && height > 0.0f) {
+            float peak = 0.0f;
+            for (float s : samples) {
+                peak = std::max(peak, std::abs(s));
+            }
+            const float invPeak = peak > 1e-4f ? (1.0f / peak) : 1.0f;
+            const float midY = scopeRect.top + height * 0.5f;
+            const float scaleY = height * 0.45f;
+            float prevX = scopeRect.left;
+            float prevY =
+                midY - std::clamp(samples[0] * invPeak, -1.0f, 1.0f) * scaleY;
+            const float step =
+                width / static_cast<float>(samples.size() - 1);
+
+            const float originalOpacity = scopeBrush->GetOpacity();
+            scopeBrush->SetOpacity(highlighted ? 1.0f : 0.85f);
+            const float thickness = highlighted ? 2.0f : 1.6f;
+            for (std::size_t i = 1; i < samples.size(); ++i) {
+                const float x =
+                    scopeRect.left + step * static_cast<float>(i);
+                const float y =
+                    midY - std::clamp(samples[i] * invPeak, -1.0f, 1.0f) *
+                               scaleY;
+                target->DrawLine(D2D1::Point2F(prevX, prevY),
+                                 D2D1::Point2F(x, y), scopeBrush, thickness);
+                prevX = x;
+                prevY = y;
+            }
+            scopeBrush->SetOpacity(originalOpacity);
         }
     }
 
-    // 拨弦位置：一条弦和一个可移动的击弦点
+    // 拨弦位置：一条弦和一个可移动的击弦点（放在 scope 下方）
     if (accentBrush) {
+        const float stringAreaTop = scopeRect.bottom + 6.0f;
+        const float stringAreaBottom = innerBottom;
+        const float stringAreaHeight =
+            std::max(0.0f, stringAreaBottom - stringAreaTop);
         const float stringY =
-            innerTop + (innerBottom - innerTop) * 0.25f;
+            stringAreaTop + stringAreaHeight * 0.5f;
         target->DrawLine(D2D1::Point2F(innerLeft, stringY),
                          D2D1::Point2F(innerRight, stringY), accentBrush,
                          highlighted ? 2.2f : 1.5f);

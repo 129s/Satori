@@ -43,12 +43,6 @@ void TopBarNode::draw(const RenderResources& resources) {
         resources.panelBrush ? resources.panelBrush : resources.trackBrush;
     if (backgroundBrush) {
         resources.target->FillRectangle(bounds_, backgroundBrush);
-        if (resources.trackBrush) {
-            const auto divider = D2D1::RectF(
-                bounds_.left, bounds_.bottom - 1.5f, bounds_.right,
-                bounds_.bottom);
-            resources.target->FillRectangle(divider, resources.trackBrush);
-        }
     }
 
     const float width = bounds_.right - bounds_.left;

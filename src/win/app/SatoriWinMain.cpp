@@ -69,6 +69,7 @@ private:
     void updatePresetStatus(const std::wstring& text);
     void syncSynthConfig();
     std::vector<float> generateWaveform(double frequency);
+    std::vector<float> generateExcitationTransient(double frequency);
     void refreshWaveformPreview(double frequency = 440.0);
     void handleVirtualKeyEvent(int midiNote, double frequency, bool pressed);
     void initializeKeyBindings();
@@ -91,6 +92,7 @@ private:
     std::wstring audioStatus_ = L"音频：未初始化";
     std::wstring presetStatus_ = L"预设：默认";
     std::vector<float> waveformSamples_;
+    std::vector<float> excitationSamples_;
 #if SATORI_UI_DEBUG_ENABLED
     bool trackingMouseLeave_ = false;
 #endif
@@ -145,6 +147,7 @@ winui::FlowDiagramState SatoriAppState::buildDiagramState() const {
     diagram.roomAmount = synthConfig_.roomAmount;
     diagram.noiseType =
         (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
+    diagram.excitationSamples = excitationSamples_;
     diagram.highlightedModule = winui::FlowModule::kNone;
     return diagram;
 }
@@ -164,25 +167,6 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.audioOnline = audioReady_;
     model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
     model.diagram = buildDiagramState();
-
-    auto addButton = [&](const std::wstring& label, std::function<void()> onClick) {
-        model.buttons.push_back(winui::ButtonDescriptor{label, std::move(onClick)});
-    };
-
-    addButton(L"演奏", [this]() {
-        if (uiMode_ != winui::UIMode::Play) {
-            uiMode_ = winui::UIMode::Play;
-            refreshUI();
-        }
-    });
-    addButton(L"内部", [this]() {
-        if (uiMode_ != winui::UIMode::Internal) {
-            uiMode_ = winui::UIMode::Internal;
-            refreshUI();
-        }
-    });
-    addButton(L"载入预设", [this]() { handleLoadPreset(); });
-    addButton(L"保存预设", [this]() { handleSavePreset(); });
 
     auto makeModule = [](std::wstring title, winui::FlowModule module,
                          bool shared) {
@@ -228,7 +212,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
                   },
                   winui::FlowModule::kExcitation, true));
     excitation.params.push_back(
-        makeParam(L"Excite Color", 0.0f, 1.0f,
+        makeParam(L"Hardness", 0.0f, 1.0f,
                   [this]() { return synthConfig_.excitationBrightness; },
                   [this](float value) {
                       synthConfig_.excitationBrightness = value;
@@ -237,7 +221,16 @@ winui::UIModel SatoriAppState::buildUIModel() {
                   },
                   winui::FlowModule::kExcitation, true));
     excitation.params.push_back(
-        makeParam(L"Excite Dyn", 0.0f, 1.0f,
+        makeParam(L"Mix", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.excitationMix; },
+                  [this](float value) {
+                      synthConfig_.excitationMix = value;
+                      syncSynthConfig();
+                      refreshWaveformPreview();
+                  },
+                  winui::FlowModule::kExcitation, true));
+    excitation.params.push_back(
+        makeParam(L"Vel. Sens", 0.0f, 1.0f,
                   [this]() { return synthConfig_.excitationVelocity; },
                   [this](float value) {
                       synthConfig_.excitationVelocity = value;
@@ -246,14 +239,14 @@ winui::UIModel SatoriAppState::buildUIModel() {
                   },
                   winui::FlowModule::kExcitation, true));
     excitation.params.push_back(
-        makeParam(L"Pick Position", 0.05f, 0.95f,
+        makeParam(L"Position", 0.05f, 0.95f,
                   [this]() { return synthConfig_.pickPosition; },
                   [this](float value) {
                       synthConfig_.pickPosition = value;
                       syncSynthConfig();
                       refreshWaveformPreview();
                   },
-                  winui::FlowModule::kExcitation, true));
+                  winui::FlowModule::kExcitation, false));
     excitation.params.push_back(
         makeParam(L"Excite Mode", 0.0f, 1.0f,
                   [this]() {
@@ -452,10 +445,26 @@ std::vector<float> SatoriAppState::generateWaveform(double frequency) {
     return samples;
 }
 
+std::vector<float> SatoriAppState::generateExcitationTransient(double frequency) {
+    if (frequency <= 0.0) {
+        return {};
+    }
+    synthesis::KarplusStrongString string(synthConfig_);
+    string.start(frequency, 1.0f);
+    auto samples = string.excitationBufferPreview(1024);
+    const float gain = masterGain_;
+    for (auto& sample : samples) {
+        sample *= gain;
+    }
+    return samples;
+}
+
 void SatoriAppState::refreshWaveformPreview(double frequency) {
     waveformSamples_ = generateWaveform(frequency);
+    excitationSamples_ = generateExcitationTransient(frequency);
     if (d2d_) {
         d2d_->updateWaveformSamples(waveformSamples_);
+        d2d_->updateDiagramState(buildDiagramState());
     }
     if (window_) {
         InvalidateRect(window_, nullptr, FALSE);

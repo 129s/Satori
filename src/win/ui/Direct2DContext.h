@@ -33,6 +33,7 @@ class KnobPanelNode;
 class ButtonBarNode;
 class KeyboardNode;
 class WaveformNode;
+class ModulePreviewNode;
 
 class Direct2DContext {
 public:
@@ -79,6 +80,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> renderTarget_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> accentBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> excitationBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> textBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> trackBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fillBrush_;
@@ -119,9 +121,16 @@ private:
     std::shared_ptr<UIHorizontalStack> mainRow_;
     std::shared_ptr<UILayoutNode> leftColumn_;
     std::shared_ptr<UILayoutNode> rightColumn_;
-    std::shared_ptr<FlowDiagramNode> flowNode_;
-    std::shared_ptr<KnobPanelNode> knobPanelNode_;
-    std::shared_ptr<WaveformNode> waveformNode_;
+    // Unified main UI: 4 module preview cards + per-module knob panels.
+    std::shared_ptr<ModulePreviewNode> excitationPreviewNode_;
+    std::shared_ptr<ModulePreviewNode> stringPreviewNode_;
+    std::shared_ptr<ModulePreviewNode> bodyPreviewNode_;
+    std::shared_ptr<ModulePreviewNode> roomPreviewNode_;
+
+    std::shared_ptr<KnobPanelNode> excitationKnobsNode_;
+    std::shared_ptr<KnobPanelNode> stringKnobsNode_;
+    std::shared_ptr<KnobPanelNode> bodyKnobsNode_;
+    std::shared_ptr<KnobPanelNode> roomKnobsNode_;
     std::shared_ptr<KeyboardNode> keyboardNode_;
     KeyboardColors keyboardColors_{};
 };

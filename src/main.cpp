@@ -25,6 +25,7 @@ struct AppConfig {
     float dispersionAmount = 0.12f;
     float excitationBrightness = 0.6f;
     float excitationVelocity = 0.5f;
+    float excitationMix = 1.0f;
     float pickPosition = 0.5f;
     float bodyTone = 0.5f;
     float bodySize = 0.5f;
@@ -41,7 +42,7 @@ struct AppConfig {
 void printUsage() {
     std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
-                 "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--pickpos 0.5] "
+                 "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--mix 1.0] [--pickpos 0.5] "
                  "[--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] [--noise white|binary] "
                  "[--excitation random|fixed] [--filter lowpass|none] "
                  "[--release 0.35] [--seed 1234] [--output out.wav]\n";
@@ -160,6 +161,7 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     config.dispersionAmount = defaultDispersionAmount();
     config.excitationBrightness = defaultValue(engine::ParamId::ExcitationBrightness, 0.6f);
     config.excitationVelocity = defaultValue(engine::ParamId::ExcitationVelocity, 0.5f);
+    config.excitationMix = defaultValue(engine::ParamId::ExcitationMix, 1.0f);
     config.bodyTone = defaultValue(engine::ParamId::BodyTone, 0.5f);
     config.bodySize = defaultValue(engine::ParamId::BodySize, 0.5f);
     config.roomAmount = defaultValue(engine::ParamId::RoomAmount, 0.0f);
@@ -203,6 +205,12 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     }
     if (auto it = kv.find("exciteVel"); it != kv.end()) {
         parseFloat(it->second, config.excitationVelocity);
+    }
+    if (auto it = kv.find("mix"); it != kv.end()) {
+        parseFloat(it->second, config.excitationMix);
+    }
+    if (auto it = kv.find("impulseMix"); it != kv.end()) {
+        parseFloat(it->second, config.excitationMix);
     }
     if (auto it = kv.find("pickpos"); it != kv.end()) {
         parseFloat(it->second, config.pickPosition);
@@ -335,6 +343,7 @@ int main(int argc, char** argv) {
     synthEngine.setParam(engine::ParamId::ExcitationBrightness,
                          appConfig.excitationBrightness);
     synthEngine.setParam(engine::ParamId::ExcitationVelocity, appConfig.excitationVelocity);
+    synthEngine.setParam(engine::ParamId::ExcitationMix, appConfig.excitationMix);
     synthEngine.setParam(engine::ParamId::PickPosition, appConfig.pickPosition);
     synthEngine.setParam(engine::ParamId::BodyTone, appConfig.bodyTone);
     synthEngine.setParam(engine::ParamId::BodySize, appConfig.bodySize);

@@ -11,6 +11,7 @@ namespace winui {
 struct RenderResources {
     ID2D1HwndRenderTarget* target = nullptr;
     ID2D1SolidColorBrush* accentBrush = nullptr;
+    ID2D1SolidColorBrush* excitationBrush = nullptr;
     ID2D1SolidColorBrush* textBrush = nullptr;
     ID2D1SolidColorBrush* trackBrush = nullptr;
     ID2D1SolidColorBrush* fillBrush = nullptr;

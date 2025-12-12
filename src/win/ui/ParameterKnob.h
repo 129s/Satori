@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <chrono>
 
 #include <d2d1.h>
 #include <dwrite.h>
@@ -65,6 +66,7 @@ private:
     float min_ = 0.0f;
     float max_ = 1.0f;
     float value_ = 0.0f;
+    float defaultValue_ = 0.0f;
     Callback onChange_;
 
     D2D1_RECT_F bounds_{};
@@ -72,6 +74,9 @@ private:
     bool dragging_ = false;
     float dragStartY_ = 0.0f;
     float dragStartValue_ = 0.0f;
+    std::chrono::steady_clock::time_point lastClickTime_{};
+    float lastClickX_ = 0.0f;
+    float lastClickY_ = 0.0f;
     mutable bool debugRectsValid_ = false;
     mutable D2D1_RECT_F debugBorderRect_{};
     mutable D2D1_RECT_F debugPaddingRect_{};

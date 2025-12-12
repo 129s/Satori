@@ -39,17 +39,16 @@ void ButtonBarNode::draw(const RenderResources& resources) {
         return;
     }
     for (const auto& button : buttons_) {
-        ID2D1SolidColorBrush* brush = resources.fillBrush;
+        ID2D1SolidColorBrush* brush =
+            resources.trackBrush ? resources.trackBrush : resources.fillBrush;
         if (button.pressed) {
             // 按下：使用强调色填充
             brush = resources.accentBrush;
         } else if (button.hovered) {
             // hover：略提高亮度，仍保持与整体风格一致
-            brush = resources.panelBrush ? resources.panelBrush : resources.fillBrush;
+            brush = resources.fillBrush;
         }
         resources.target->FillRectangle(button.bounds, brush);
-        resources.target->DrawRectangle(button.bounds, resources.accentBrush,
-                                        1.5f);
         resources.target->DrawText(button.desc.label.c_str(),
                                    static_cast<UINT32>(button.desc.label.size()),
                                    resources.textFormat, button.bounds,

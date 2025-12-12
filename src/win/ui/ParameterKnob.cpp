@@ -88,6 +88,7 @@ ParameterKnob::ParameterKnob(std::wstring label,
       min_(min),
       max_(max),
       value_(Clamp(initialValue, min, max)),
+      defaultValue_(Clamp(initialValue, min, max)),
       onChange_(std::move(onChange)) {
     bounds_ = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
 }
@@ -254,11 +255,11 @@ void ParameterKnob::drawBody(ID2D1HwndRenderTarget* target,
         return;
     }
 
-    auto factory = GetLocalDWriteFactory();
+    auto dwriteFactory = GetLocalDWriteFactory();
     bool labelDrawn = false;
-    if (factory) {
+    if (dwriteFactory) {
         ComPtr<IDWriteTextLayout> labelLayout;
-        if (SUCCEEDED(factory->CreateTextLayout(
+        if (SUCCEEDED(dwriteFactory->CreateTextLayout(
                 label_.c_str(), static_cast<UINT32>(label_.size()),
                 textFormat,
                 layout.labelTextRect.right - layout.labelTextRect.left,
@@ -269,12 +270,21 @@ void ParameterKnob::drawBody(ID2D1HwndRenderTarget* target,
             labelLayout->SetParagraphAlignment(
                 DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             labelLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-            DWRITE_TRIMMING trimming{};
-            trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
-            ComPtr<IDWriteInlineObject> ellipsis;
-            if (SUCCEEDED(
-                    factory->CreateEllipsisTrimmingSign(textFormat, &ellipsis))) {
-                labelLayout->SetTrimming(&trimming, ellipsis.Get());
+
+            // Auto-fit label to avoid ellipsis/truncation.
+            DWRITE_TEXT_METRICS metrics{};
+            if (SUCCEEDED(labelLayout->GetMetrics(&metrics))) {
+                const float availW =
+                    layout.labelTextRect.right - layout.labelTextRect.left;
+                if (metrics.widthIncludingTrailingWhitespace > availW + 0.5f) {
+                    const float baseSize = textFormat->GetFontSize();
+                    const float scale =
+                        availW / std::max(1.0f, metrics.widthIncludingTrailingWhitespace);
+                    const float newSize = std::max(12.0f, baseSize * scale);
+                    const DWRITE_TEXT_RANGE range{
+                        0u, static_cast<UINT32>(label_.size())};
+                    (void)labelLayout->SetFontSize(newSize, range);
+                }
             }
             target->DrawTextLayout(
                 D2D1::Point2F(layout.labelTextRect.left,
@@ -288,26 +298,20 @@ void ParameterKnob::drawBody(ID2D1HwndRenderTarget* target,
                          textFormat, layout.labelTextRect, textBrush);
     }
 
-    // 旋钮圆盘
-    ID2D1SolidColorBrush* fill = fillBrush;             // 圆盘
     const bool active = hovered_ || dragging_;
 
-    // 避免与背景撞色：外圈和槽线优先使用高对比度的 accent/text 颜色。
-    ID2D1SolidColorBrush* ringBrush =
-        accentBrush ? accentBrush : textBrush;          // 外圈
-    ID2D1SolidColorBrush* slotBrush =
-        accentBrush ? accentBrush : textBrush;          // 外圈值槽
-    ID2D1SolidColorBrush* pointerBrush =
-        textBrush ? textBrush : accentBrush;            // 指针优先用文本色，保证对比度
+    ID2D1SolidColorBrush* ringBrush = baseBrush ? baseBrush : fillBrush;
+    ID2D1SolidColorBrush* slotBrush = accentBrush ? accentBrush : textBrush;
+    ID2D1SolidColorBrush* discBrush = fillBrush ? fillBrush : baseBrush;
 
-    // hover / 拖拽时让值槽变亮，而不是改变旋钮尺寸。
-    if (active && accentBrush) {
-        slotBrush = accentBrush;
-    }
-
+    // Subtle inner disc for depth.
     const D2D1_ELLIPSE ellipse{layout.center, layout.radius, layout.radius};
-    target->FillEllipse(ellipse, fill);
-    target->DrawEllipse(ellipse, ringBrush, 1.5f);
+    if (discBrush) {
+        const float original = discBrush->GetOpacity();
+        discBrush->SetOpacity(active ? 0.95f : 0.85f);
+        target->FillEllipse(ellipse, discBrush);
+        discBrush->SetOpacity(original);
+    }
 
     // 归一化数值并限制到 [0, 1]，避免非法范围。
     const float range = max_ - min_;
@@ -321,62 +325,59 @@ void ParameterKnob::drawBody(ID2D1HwndRenderTarget* target,
                              layout.slotThicknessBase *
                                  0.5f;  // 值槽中心线半径
 
-    // 外圈值槽：在 270° 扫角范围内画一条略大于旋钮的弧线。
-    // 使用 PathGeometry + ArcSegment 绘制连续圆弧，避免由多段线条拼接导致的“折线感”。
-    if (slotBrush && clampedNorm > 0.001f) {
-        const float slotThickness =
-            layout.slotThicknessBase;  // 粗细固定，不随状态变化
+    const float slotThickness = layout.slotThicknessBase;
 
-        const float endAngle = startAngle + sweep * clampedNorm;
-        const float arcAngle = std::fabs(endAngle - startAngle);
-        if (arcAngle > 1e-3f) {
-            const D2D1_POINT_2F startPoint = D2D1::Point2F(
-                layout.center.x + std::cos(startAngle) * slotRadius,
-                layout.center.y + std::sin(startAngle) * slotRadius);
-            const D2D1_POINT_2F endPoint = D2D1::Point2F(
-                layout.center.x + std::cos(endAngle) * slotRadius,
-                layout.center.y + std::sin(endAngle) * slotRadius);
-
-            ComPtr<ID2D1Factory> factory;
-            target->GetFactory(&factory);
-            if (factory) {
-                ComPtr<ID2D1PathGeometry> geometry;
-                if (SUCCEEDED(factory->CreatePathGeometry(&geometry))) {
-                    ComPtr<ID2D1GeometrySink> sink;
-                    if (SUCCEEDED(geometry->Open(&sink))) {
-                        sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
-                        sink->BeginFigure(startPoint,
-                                          D2D1_FIGURE_BEGIN_HOLLOW);
-
-                        D2D1_ARC_SEGMENT arc{};
-                        arc.point = endPoint;
-                        arc.size = D2D1::SizeF(slotRadius, slotRadius);
-                        arc.rotationAngle = 0.0f;
-                        arc.sweepDirection =
-                            D2D1_SWEEP_DIRECTION_CLOCKWISE;
-                        arc.arcSize = (arcAngle >= kPi)
-                                          ? D2D1_ARC_SIZE_LARGE
-                                          : D2D1_ARC_SIZE_SMALL;
-
-                        sink->AddArc(arc);
-                        sink->EndFigure(D2D1_FIGURE_END_OPEN);
-                        sink->Close();
-
-                        target->DrawGeometry(geometry.Get(), slotBrush,
-                                             slotThickness);
-                    }
-                }
+    ComPtr<ID2D1Factory> d2dFactory;
+    target->GetFactory(&d2dFactory);
+    auto drawArc = [&](float a0, float a1, ID2D1SolidColorBrush* brush) {
+        if (!d2dFactory || !brush) return;
+        const float arcAngle = std::fabs(a1 - a0);
+        if (arcAngle < 1e-3f) return;
+        const D2D1_POINT_2F startPoint = D2D1::Point2F(
+            layout.center.x + std::cos(a0) * slotRadius,
+            layout.center.y + std::sin(a0) * slotRadius);
+        const D2D1_POINT_2F endPoint = D2D1::Point2F(
+            layout.center.x + std::cos(a1) * slotRadius,
+            layout.center.y + std::sin(a1) * slotRadius);
+        ComPtr<ID2D1PathGeometry> geometry;
+        if (SUCCEEDED(d2dFactory->CreatePathGeometry(&geometry)) && geometry) {
+            ComPtr<ID2D1GeometrySink> sink;
+            if (SUCCEEDED(geometry->Open(&sink)) && sink) {
+                sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+                sink->BeginFigure(startPoint, D2D1_FIGURE_BEGIN_HOLLOW);
+                D2D1_ARC_SEGMENT arc{};
+                arc.point = endPoint;
+                arc.size = D2D1::SizeF(slotRadius, slotRadius);
+                arc.rotationAngle = 0.0f;
+                arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+                arc.arcSize =
+                    (arcAngle >= kPi) ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL;
+                sink->AddArc(arc);
+                sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                (void)sink->Close();
+                target->DrawGeometry(geometry.Get(), brush, slotThickness);
             }
         }
+    };
+
+    // Background ring (full sweep, dim).
+    if (ringBrush) {
+        const float original = ringBrush->GetOpacity();
+        ringBrush->SetOpacity(active ? 0.95f : 0.70f);
+        drawArc(startAngle, startAngle + sweep, ringBrush);
+        ringBrush->SetOpacity(original);
     }
 
-    const float angle = startAngle + sweep * clampedNorm;
-    const float pointerLen = layout.radius * 0.8f;
-    const float pointerWidth = dragging_ ? 3.0f : 2.0f;
-    const D2D1_POINT_2F pointerEnd = D2D1::Point2F(
-        layout.center.x + std::cos(angle) * pointerLen,
-        layout.center.y + std::sin(angle) * pointerLen);
-    target->DrawLine(layout.center, pointerEnd, pointerBrush, pointerWidth);
+    // Foreground progress arc + endpoint dot.
+    if (slotBrush && clampedNorm > 0.001f) {
+        const float endAngle = startAngle + sweep * clampedNorm;
+        drawArc(startAngle, endAngle, slotBrush);
+        const D2D1_POINT_2F endPoint = D2D1::Point2F(
+            layout.center.x + std::cos(endAngle) * slotRadius,
+            layout.center.y + std::sin(endAngle) * slotRadius);
+        const float dotR = slotThickness * (active ? 0.50f : 0.42f);
+        target->FillEllipse(D2D1::Ellipse(endPoint, dotR, dotR), slotBrush);
+    }
 
     // 调试叠加：以统一盒模型样式绘制外框。
 #if SATORI_UI_DEBUG_ENABLED
@@ -533,6 +534,31 @@ bool ParameterKnob::onPointerDown(float x, float y) {
     if (!hitTest(x, y)) {
         return false;
     }
+
+    // Double-click to reset to default value.
+    const auto now = std::chrono::steady_clock::now();
+    bool isDoubleClick = false;
+    if (lastClickTime_ != std::chrono::steady_clock::time_point{}) {
+        const auto dt = now - lastClickTime_;
+        if (dt < std::chrono::milliseconds(450)) {
+            const float dx = x - lastClickX_;
+            const float dy = y - lastClickY_;
+            if ((dx * dx + dy * dy) < 25.0f) {
+                isDoubleClick = true;
+            }
+        }
+    }
+    lastClickTime_ = now;
+    lastClickX_ = x;
+    lastClickY_ = y;
+
+    if (isDoubleClick) {
+        setValue(defaultValue_, true);
+        dragging_ = false;
+        hovered_ = true;
+        return true;
+    }
+
     dragging_ = true;
     hovered_ = true;
     dragStartY_ = y;

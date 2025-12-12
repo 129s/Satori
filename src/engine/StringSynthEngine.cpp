@@ -409,7 +409,7 @@ private:
             voices_.back().envelope.setReleaseSeconds(releaseSeconds_);
             return &voices_.back();
         }
-        // Voice stealing：优先选择已在释放阶段的 voice；否则取能量最低者，能量相同则选择更早启动的 voice。
+        // Voice stealing: prefer releasing voices, otherwise lowest energy, then oldest.
         auto candidate = std::min_element(
             voices_.begin(), voices_.end(),
             [](const Voice& a, const Voice& b) {
@@ -477,6 +477,8 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::ExcitationBrightness, config.excitationBrightness, config_,
                        masterGain_);
     applyParamUnlocked(ParamId::ExcitationVelocity, config.excitationVelocity, config_,
+                       masterGain_);
+    applyParamUnlocked(ParamId::ExcitationMix, config.excitationMix, config_,
                        masterGain_);
     applyParamUnlocked(ParamId::BodyTone, config.bodyTone, config_, masterGain_);
     applyParamUnlocked(ParamId::BodySize, config.bodySize, config_, masterGain_);
@@ -595,6 +597,8 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.excitationBrightness;
         case ParamId::ExcitationVelocity:
             return config_.excitationVelocity;
+        case ParamId::ExcitationMix:
+            return config_.excitationMix;
         case ParamId::BodyTone:
             return config_.bodyTone;
         case ParamId::BodySize:
@@ -779,6 +783,9 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
             break;
         case ParamId::ExcitationVelocity:
             config.excitationVelocity = clamped;
+            break;
+        case ParamId::ExcitationMix:
+            config.excitationMix = clamped;
             break;
         case ParamId::BodyTone:
             config.bodyTone = clamped;

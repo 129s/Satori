@@ -185,6 +185,14 @@ bool PresetManager::parse(const std::string& content,
         }
         params.setParam(engine::ParamId::ExcitationVelocity, value);
     }
+    if (auto exciteMix = ExtractValue(content, "excitationMix")) {
+        const float value = ParseFloat(*exciteMix, ok);
+        if (!ok) {
+            errorMessage = L"解析 excitationMix 失败";
+            return false;
+        }
+        params.setParam(engine::ParamId::ExcitationMix, value);
+    }
     if (auto bodyTone = ExtractValue(content, "bodyTone")) {
         const float value = ParseFloat(*bodyTone, ok);
         if (!ok) {
@@ -291,6 +299,7 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         << "  \"brightness\": " << config.brightness << ",\n"
         << "  \"excitationBrightness\": " << config.excitationBrightness << ",\n"
         << "  \"excitationVelocity\": " << config.excitationVelocity << ",\n"
+        << "  \"excitationMix\": " << config.excitationMix << ",\n"
         << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
         << "  \"bodyTone\": " << config.bodyTone << ",\n"
         << "  \"bodySize\": " << config.bodySize << ",\n"

@@ -14,6 +14,11 @@ if (WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
+if (MSVC)
+    # Treat all sources as UTF-8 to avoid codepage-related parse issues on Windows.
+    add_compile_options(/utf-8)
+endif()
+
 add_library(SatoriCoreLib STATIC
     src/audio/WaveWriter.cpp
     src/dsp/Filter.cpp
@@ -70,6 +75,7 @@ if (WIN32)
         src/win/ui/nodes/TopBarNode.cpp
         src/win/ui/nodes/KnobPanelNode.cpp
         src/win/ui/nodes/FlowDiagramNode.cpp
+        src/win/ui/nodes/ModulePreviewNode.cpp
         src/win/ui/nodes/KeyboardNode.cpp
         src/win/ui/VirtualKeyboard.cpp
         src/win/ui/WaveformView.cpp

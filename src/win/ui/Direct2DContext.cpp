@@ -17,6 +17,7 @@
 #include "win/ui/nodes/KeyboardNode.h"
 #include "win/ui/nodes/TopBarNode.h"
 #include "win/ui/nodes/WaveformNode.h"
+#include "win/ui/nodes/ModulePreviewNode.h"
 #include "win/ui/layout/UIHorizontalStack.h"
 #include "win/ui/layout/UIStackPanel.h"
 
@@ -45,13 +46,14 @@ struct SkinBrushColors {
 
 SkinBrushColors MakeBrushColors() {
     SkinBrushColors colors{};
-    // 颜色方案借鉴 Serum UI 氛围，但固定为当前默认主题，不再提供独立皮肤切换。
-    colors.accent = D2D1::ColorF(0.4f, 0.7f, 0.9f, 1.0f);
-    colors.text = D2D1::ColorF(0.9f, 0.9f, 0.95f, 1.0f);
-    colors.track = D2D1::ColorF(0.15f, 0.15f, 0.2f, 1.0f);
-    colors.fill = D2D1::ColorF(0.25f, 0.55f, 0.75f, 1.0f);
-    colors.panel = D2D1::ColorF(0.12f, 0.15f, 0.2f, 1.0f);
-    colors.grid = D2D1::ColorF(0.35f, 0.4f, 0.45f, 1.0f);
+    // Dark, layered UI with a warm accent. Background is cleared separately.
+    // Cyber cyan accent.
+    colors.accent = D2D1::ColorF(0.0f, 1.0f, 0.78f, 1.0f);   // #00FFC8
+    colors.text = D2D1::ColorF(0.92f, 0.92f, 0.92f, 1.0f);
+    colors.track = D2D1::ColorF(0.17f, 0.17f, 0.17f, 1.0f); // #2B2B2B
+    colors.fill = D2D1::ColorF(0.22f, 0.22f, 0.22f, 1.0f);  // secondary fill
+    colors.panel = D2D1::ColorF(0.12f, 0.12f, 0.12f, 1.0f); // card background #1E1E1E
+    colors.grid = D2D1::ColorF(0.45f, 0.45f, 0.45f, 0.25f); // subtle helpers
     return colors;
 }
 
@@ -199,25 +201,32 @@ void Direct2DContext::setModel(UIModel model) {
 void Direct2DContext::updateWaveformSamples(
     const std::vector<float>& samples) {
     model_.waveformSamples = samples;
-    if (flowNode_) {
-        flowNode_->setWaveformSamples(samples);
-    }
-    if (waveformNode_) {
-        waveformNode_->setSamples(samples);
+    if (roomPreviewNode_) {
+        roomPreviewNode_->setWaveformSamples(samples);
     }
 }
 
 void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
     model_.diagram = state;
-    if (flowNode_) {
-        flowNode_->setDiagramState(state);
+    if (excitationPreviewNode_) {
+        excitationPreviewNode_->setDiagramState(state);
+    }
+    if (stringPreviewNode_) {
+        stringPreviewNode_->setDiagramState(state);
+    }
+    if (bodyPreviewNode_) {
+        bodyPreviewNode_->setDiagramState(state);
+    }
+    if (roomPreviewNode_) {
+        roomPreviewNode_->setDiagramState(state);
     }
 }
 
 void Direct2DContext::syncSliders() {
-    if (knobPanelNode_) {
-        knobPanelNode_->syncKnobs();
-    }
+    if (excitationKnobsNode_) excitationKnobsNode_->syncKnobs();
+    if (stringKnobsNode_) stringKnobsNode_->syncKnobs();
+    if (bodyKnobsNode_) bodyKnobsNode_->syncKnobs();
+    if (roomKnobsNode_) roomKnobsNode_->syncKnobs();
 }
 
 bool Direct2DContext::onPointerDown(float x, float y) {
@@ -353,15 +362,29 @@ void Direct2DContext::dumpLayoutDebugInfo() {
     if (buttonBarNode_) {
         output << L"  buttons   " << formatRect(buttonBarNode_->bounds()) << L"\n";
     }
-    if (flowNode_) {
-        output << L"  flow      " << formatRect(flowNode_->bounds()) << L"\n";
+    if (excitationPreviewNode_) {
+        output << L"  excitation " << formatRect(excitationPreviewNode_->bounds()) << L"\n";
     }
-    if (waveformNode_) {
-        output << L"  waveform  " << formatRect(waveformNode_->bounds()) << L"\n";
+    if (stringPreviewNode_) {
+        output << L"  string    " << formatRect(stringPreviewNode_->bounds()) << L"\n";
     }
-    if (knobPanelNode_) {
-        output << L"  knobs     " << formatRect(knobPanelNode_->bounds())
-               << L"\n";
+    if (bodyPreviewNode_) {
+        output << L"  body      " << formatRect(bodyPreviewNode_->bounds()) << L"\n";
+    }
+    if (roomPreviewNode_) {
+        output << L"  room      " << formatRect(roomPreviewNode_->bounds()) << L"\n";
+    }
+    if (excitationKnobsNode_) {
+        output << L"  ex-knobs  " << formatRect(excitationKnobsNode_->bounds()) << L"\n";
+    }
+    if (stringKnobsNode_) {
+        output << L"  st-knobs  " << formatRect(stringKnobsNode_->bounds()) << L"\n";
+    }
+    if (bodyKnobsNode_) {
+        output << L"  bd-knobs  " << formatRect(bodyKnobsNode_->bounds()) << L"\n";
+    }
+    if (roomKnobsNode_) {
+        output << L"  rm-knobs  " << formatRect(roomKnobsNode_->bounds()) << L"\n";
     }
     if (keyboardNode_) {
         output << L"  keyboard  " << formatRect(keyboardNode_->bounds())
@@ -398,6 +421,11 @@ bool Direct2DContext::createDeviceResources() {
     if (FAILED(hr)) {
         return false;
     }
+    // Excitation Scope uses the same accent by default.
+    hr = renderTarget_->CreateSolidColorBrush(colors.accent, &excitationBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
     hr = renderTarget_->CreateSolidColorBrush(colors.text, &textBrush_);
     if (FAILED(hr)) {
         return false;
@@ -420,17 +448,17 @@ bool Direct2DContext::createDeviceResources() {
     }
     // 虚拟键盘配色复用 KeyboardSandbox 方案。
     hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.94f, 0.95f, 0.98f, 1.0f), &keyboardWhiteFillBrush_);
+        D2D1::ColorF(0.94f, 0.94f, 0.95f, 1.0f), &keyboardWhiteFillBrush_);
     if (FAILED(hr)) {
         return false;
     }
     hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.78f, 0.82f, 0.90f, 1.0f), &keyboardWhitePressedBrush_);
+        D2D1::ColorF(0.88f, 0.88f, 0.90f, 1.0f), &keyboardWhitePressedBrush_);
     if (FAILED(hr)) {
         return false;
     }
     hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.10f, 0.12f, 0.16f, 1.0f), &keyboardWhiteTextBrush_);
+        D2D1::ColorF(0.10f, 0.10f, 0.10f, 1.0f), &keyboardWhiteTextBrush_);
     if (FAILED(hr)) {
         return false;
     }
@@ -440,7 +468,7 @@ bool Direct2DContext::createDeviceResources() {
         return false;
     }
     hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.20f, 0.25f, 0.35f, 1.0f), &keyboardBlackPressedBrush_);
+        D2D1::ColorF(0.25f, 0.25f, 0.25f, 1.0f), &keyboardBlackPressedBrush_);
     if (FAILED(hr)) {
         return false;
     }
@@ -450,12 +478,12 @@ bool Direct2DContext::createDeviceResources() {
         return false;
     }
     hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.15f, 0.17f, 0.22f, 1.0f), &keyboardBorderBrush_);
+        D2D1::ColorF(0.22f, 0.22f, 0.22f, 1.0f), &keyboardBorderBrush_);
     if (FAILED(hr)) {
         return false;
     }
     hr = renderTarget_->CreateSolidColorBrush(
-        D2D1::ColorF(0.85f, 0.46f, 0.18f, 1.0f), &keyboardHoverBrush_);
+        colors.accent, &keyboardHoverBrush_);
     if (FAILED(hr)) {
         return false;
     }
@@ -480,6 +508,7 @@ bool Direct2DContext::createDeviceResources() {
 
 void Direct2DContext::discardDeviceResources() {
     accentBrush_.Reset();
+    excitationBrush_.Reset();
     textBrush_.Reset();
     trackBrush_.Reset();
     fillBrush_.Reset();
@@ -507,37 +536,51 @@ void Direct2DContext::render() {
     renderTarget_->BeginDraw();
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    D2D1_COLOR_F clearColor = D2D1::ColorF(0.07f, 0.07f, 0.09f);
+    D2D1_COLOR_F clearColor = D2D1::ColorF(0.07f, 0.07f, 0.07f);
     renderTarget_->Clear(clearColor);
-
-    if (panelBrush_) {
-        const auto bgRect =
-            D2D1::RectF(0.0f, 0.0f, static_cast<float>(width_),
-                        static_cast<float>(height_));
-        renderTarget_->FillRectangle(bgRect, panelBrush_.Get());
-    }
 
     if (rootLayout_) {
         FlowModule highlight = FlowModule::kNone;
-        if (knobPanelNode_) {
-            if (auto module = knobPanelNode_->activeModule()) {
+        auto pickHighlight = [&](const std::shared_ptr<KnobPanelNode>& panel) {
+            if (!panel) return false;
+            if (auto module = panel->activeModule()) {
                 highlight = *module;
+                return true;
+            }
+            return false;
+        };
+        (void)(pickHighlight(excitationKnobsNode_) ||
+               pickHighlight(stringKnobsNode_) ||
+               pickHighlight(bodyKnobsNode_) ||
+               pickHighlight(roomKnobsNode_));
+        if (highlight == FlowModule::kNone) {
+            if (excitationPreviewNode_ && excitationPreviewNode_->isInteracting()) {
+                highlight = FlowModule::kExcitation;
             }
         }
+
         model_.diagram.highlightedModule = highlight;
-        if (flowNode_) {
-            flowNode_->setHighlightedModule(highlight);
-        }
+        if (excitationPreviewNode_) excitationPreviewNode_->setHighlighted(highlight == FlowModule::kExcitation);
+        if (stringPreviewNode_) stringPreviewNode_->setHighlighted(highlight == FlowModule::kString);
+        if (bodyPreviewNode_) bodyPreviewNode_->setHighlighted(highlight == FlowModule::kBody);
+        if (roomPreviewNode_) roomPreviewNode_->setHighlighted(highlight == FlowModule::kRoom);
 
         auto resources = makeResources();
         rootLayout_->draw(resources);
-        if (knobPanelNode_) {
-            if (auto knob = knobPanelNode_->activeKnob()) {
+        auto drawActiveTooltip = [&](const std::shared_ptr<KnobPanelNode>& panel) {
+            if (!panel) return false;
+            if (auto knob = panel->activeKnob()) {
                 knob->drawTooltip(resources.target, resources.trackBrush,
                                   resources.fillBrush, resources.accentBrush,
                                   resources.textBrush, resources.textFormat);
+                return true;
             }
-        }
+            return false;
+        };
+        (void)(drawActiveTooltip(excitationKnobsNode_) ||
+               drawActiveTooltip(stringKnobsNode_) ||
+               drawActiveTooltip(bodyKnobsNode_) ||
+               drawActiveTooltip(roomKnobsNode_));
 #if SATORI_UI_DEBUG_ENABLED
         drawDebugOverlay();
 #endif
@@ -550,73 +593,100 @@ void Direct2DContext::render() {
 }
 
 void Direct2DContext::rebuildLayout() {
-    auto topBar = std::make_shared<TopBarNode>();
-    topBar->setTitle(L"Satori");
-    topBar->setSampleRate(model_.sampleRate);
-    topBar->setAudioOnline(model_.audioOnline);
-    topBar->setStatusText(model_.status.primary);
-    topBar->setSecondaryStatusText(model_.status.secondary);
-    topBarNode_ = topBar;
-
+    // Header/toolbar removed for now to focus on the synth surface.
+    topBarNode_.reset();
     buttonBarNode_.reset();
-    if (!model_.buttons.empty()) {
-        auto buttonBar = std::make_shared<ButtonBarNode>();
-        buttonBar->setButtons(model_.buttons);
-        buttonBarNode_ = buttonBar;
+
+    // Unified modules: create one preview + one knob panel per FlowModule.
+    auto makePreview = [&](FlowModule module) {
+        auto node = std::make_shared<ModulePreviewNode>(module);
+        node->setDiagramState(model_.diagram);
+        node->setWaveformSamples(model_.waveformSamples);
+        node->setOnSelected([this](FlowModule selected) {
+            // External highlight by click; knob hover will override in render().
+            model_.diagram.highlightedModule = selected;
+            layoutDirty_ = true;
+        });
+        return node;
+    };
+    excitationPreviewNode_ = makePreview(FlowModule::kExcitation);
+    stringPreviewNode_ = makePreview(FlowModule::kString);
+    bodyPreviewNode_ = makePreview(FlowModule::kBody);
+    roomPreviewNode_ = makePreview(FlowModule::kRoom);
+
+    // Bind Excitation "Position" to an interactive slider inside the preview card.
+    auto findParam = [&](FlowModule module,
+                         const std::wstring& label) -> const ModuleParamDescriptor* {
+        for (const auto& m : model_.modules) {
+            if (m.module != module) continue;
+            for (const auto& p : m.params) {
+                if (p.label == label) return &p;
+            }
+        }
+        return nullptr;
+    };
+    if (excitationPreviewNode_) {
+        if (const auto* pos = findParam(FlowModule::kExcitation, L"Position")) {
+            excitationPreviewNode_->setPickPositionRange(pos->min, pos->max);
+            excitationPreviewNode_->setOnPickPositionChanged(
+                [setter = pos->setter](float value) {
+                    if (setter) setter(value);
+                });
+        }
     }
 
-    flowNode_ = std::make_shared<FlowDiagramNode>();
-    flowNode_->setDiagramState(model_.diagram);
-    flowNode_->setWaveformSamples(model_.waveformSamples);
-    flowNode_->setOnModuleSelected([this](FlowModule module) {
-        if (knobPanelNode_) {
-            knobPanelNode_->setExternalHighlight(module);
-            layoutDirty_ = true;
+    auto makeKnobs = [&](FlowModule module) {
+        auto node = std::make_shared<KnobPanelNode>();
+        // Filter modules list down to this module.
+        std::vector<ModuleUI> filtered;
+        for (const auto& m : model_.modules) {
+            if (m.module == module) {
+                filtered.push_back(m);
+            }
         }
-    });
-
-    knobPanelNode_ = std::make_shared<KnobPanelNode>();
-    knobPanelNode_->setModules(model_.modules,
-                               model_.mode == UIMode::Play,
-                               model_.mode == UIMode::Internal);
+        node->setModules(filtered, /*surfaceOnly=*/true, /*compactLayout=*/false);
+        return node;
+    };
+    excitationKnobsNode_ = makeKnobs(FlowModule::kExcitation);
+    stringKnobsNode_ = makeKnobs(FlowModule::kString);
+    bodyKnobsNode_ = makeKnobs(FlowModule::kBody);
+    roomKnobsNode_ = makeKnobs(FlowModule::kRoom);
 #if SATORI_UI_DEBUG_ENABLED
     applyDebugOverlayState();
 #endif
-
-    waveformNode_ = std::make_shared<WaveformNode>();
-    waveformNode_->setSamples(model_.waveformSamples);
 
     keyboardNode_ = std::make_shared<KeyboardNode>();
     keyboardNode_->setColors(keyboardColors_);
     keyboardNode_->setConfig(model_.keyboardConfig, model_.keyCallback);
 
-    auto leftStack = std::make_shared<UIStackPanel>(8.0f);
-    leftStack->setItems({
-        {flowNode_, {UISizeMode::kAuto, 0.0f, 240.0f}},
-        {knobPanelNode_, {UISizeMode::kAuto, 0.0f, 220.0f}},
-    });
-    leftColumn_ = leftStack;
+    // Four vertical module columns.
+    auto makeColumn = [&](std::shared_ptr<ModulePreviewNode> preview,
+                          std::shared_ptr<KnobPanelNode> knobs) {
+        auto col = std::make_shared<UIStackPanel>(8.0f);
+        col->setItems({
+            {preview, {UISizeMode::kAuto, 0.0f, 180.0f}},
+            {knobs, {UISizeMode::kAuto, 0.0f, 220.0f}},
+        });
+        return col;
+    };
 
-    auto rightStack = std::make_shared<UIStackPanel>(8.0f);
-    rightStack->setItems({
-        {waveformNode_, {UISizeMode::kAuto, 0.0f, 160.0f}},
-    });
-    rightColumn_ = rightStack;
+    auto excitationCol = makeColumn(excitationPreviewNode_, excitationKnobsNode_);
+    auto stringCol = makeColumn(stringPreviewNode_, stringKnobsNode_);
+    auto bodyCol = makeColumn(bodyPreviewNode_, bodyKnobsNode_);
+    auto roomCol = makeColumn(roomPreviewNode_, roomKnobsNode_);
 
-    auto mainRow = std::make_shared<UIHorizontalStack>(8.0f);
+    auto mainRow = std::make_shared<UIHorizontalStack>(12.0f);
     mainRow->setItems({
-        {leftStack, {UISizeMode::kPercent, 0.62f, 320.0f}},
-        {rightStack, {UISizeMode::kPercent, 0.38f, 160.0f}},
+        {excitationCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {stringCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {bodyCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {roomCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
     });
     mainRow_ = mainRow;
 
     auto rootStack = std::make_shared<UIStackPanel>(8.0f);
     std::vector<UIStackPanel::Item> items;
-    items.push_back({topBar, {UISizeMode::kAuto, 0.0f, 52.0f}});
-    if (buttonBarNode_) {
-        items.push_back({buttonBarNode_, {UISizeMode::kAuto, 0.0f, 44.0f}});
-    }
-    items.push_back({mainRow, {UISizeMode::kAuto, 0.0f, 420.0f}});
+    items.push_back({mainRow, {UISizeMode::kAuto, 0.0f, 480.0f}});
     items.push_back({keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}});
     rootStack->setItems(std::move(items));
 
@@ -711,8 +781,23 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
         return std::nullopt;
     }
 
-    if (knobPanelNode_) {
-        if (auto panel = knobPanelNode_->debugBoxForPoint(x, y)) {
+    if (excitationKnobsNode_) {
+        if (auto panel = excitationKnobsNode_->debugBoxForPoint(x, y)) {
+            return panel;
+        }
+    }
+    if (stringKnobsNode_) {
+        if (auto panel = stringKnobsNode_->debugBoxForPoint(x, y)) {
+            return panel;
+        }
+    }
+    if (bodyKnobsNode_) {
+        if (auto panel = bodyKnobsNode_->debugBoxForPoint(x, y)) {
+            return panel;
+        }
+    }
+    if (roomKnobsNode_) {
+        if (auto panel = roomKnobsNode_->debugBoxForPoint(x, y)) {
             return panel;
         }
     }
@@ -730,13 +815,25 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
             return keyboardSelection;
         }
     }
-    if (waveformNode_) {
-        if (auto waveSelection = checkNode(waveformNode_)) {
-            return waveSelection;
+    if (excitationPreviewNode_) {
+        if (auto sel = checkNode(excitationPreviewNode_)) {
+            return sel;
         }
     }
-    if (auto flowSelection = checkNode(flowNode_)) {
-        return flowSelection;
+    if (stringPreviewNode_) {
+        if (auto sel = checkNode(stringPreviewNode_)) {
+            return sel;
+        }
+    }
+    if (bodyPreviewNode_) {
+        if (auto sel = checkNode(bodyPreviewNode_)) {
+            return sel;
+        }
+    }
+    if (roomPreviewNode_) {
+        if (auto sel = checkNode(roomPreviewNode_)) {
+            return sel;
+        }
     }
     if (auto topSelection = checkNode(topBarNode_)) {
         return topSelection;
@@ -756,6 +853,7 @@ RenderResources Direct2DContext::makeResources() {
     RenderResources resources;
     resources.target = renderTarget_.Get();
     resources.accentBrush = accentBrush_.Get();
+    resources.excitationBrush = excitationBrush_.Get();
     resources.textBrush = textBrush_.Get();
     resources.trackBrush = trackBrush_.Get();
     resources.fillBrush = fillBrush_.Get();

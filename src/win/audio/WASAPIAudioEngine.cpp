@@ -209,7 +209,7 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
         return false;
     }
     config_.bufferFrames = bufferFrameCount;
-    // 预填充静音
+    // Pre-fill with silence.
     BYTE* data = nullptr;
     hr = renderClient_->GetBuffer(bufferFrameCount, &data);
     if (FAILED(hr)) {

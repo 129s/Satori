@@ -27,6 +27,7 @@ const std::vector<ParamInfo>& GetParamInfoList() {
          0.6f},
         {ParamId::ExcitationVelocity, "excitationVelocity", ParamType::Float, 0.0f, 1.0f,
          0.5f},
+        {ParamId::ExcitationMix, "excitationMix", ParamType::Float, 0.0f, 1.0f, 1.0f},
         {ParamId::BodyTone, "bodyTone", ParamType::Float, 0.0f, 1.0f, 0.5f},
         {ParamId::BodySize, "bodySize", ParamType::Float, 0.0f, 1.0f, 0.5f},
         {ParamId::RoomAmount, "roomAmount", ParamType::Float, 0.0f, 1.0f, 0.0f},

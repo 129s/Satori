@@ -154,15 +154,10 @@ void KnobPanelNode::draw(const RenderResources& resources) {
 
     auto* panelBrush =
         resources.panelBrush ? resources.panelBrush : resources.trackBrush;
-    auto* borderBrush =
-        resources.gridBrush ? resources.gridBrush : resources.accentBrush;
 
     for (const auto& group : groups_) {
         if (panelBrush) {
             resources.target->FillRectangle(group.bounds, panelBrush);
-        }
-        if (borderBrush) {
-            resources.target->DrawRectangle(group.bounds, borderBrush, 1.0f);
         }
 
         // 标题

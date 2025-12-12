@@ -15,18 +15,19 @@ enum class ExcitationMode { RandomNoisePick, FixedNoisePick };
 
 struct StringConfig {
     double sampleRate = 44100.0;
-    float decay = 0.996f;        // 基础能量衰减
-    float brightness = 0.5f;     // 控制低通滤波强度
-    float excitationBrightness = 0.6f;  // 激励噪声颜色
-    float excitationVelocity = 0.5f;    // 力度对激励的调制强度
-    float pickPosition = 0.5f;   // 0-1 之间
-    float dispersionAmount = 0.12f;  // 频散强度，0 表示关闭
-    float bodyTone = 0.5f;       // 全局 Body 着色
-    float bodySize = 0.5f;       // 全局 Body 尺度
-    float roomAmount = 0.0f;     // Room/Wet 强度
+    float decay = 0.996f;        // Base energy decay per period.
+    float brightness = 0.5f;     // Low-pass strength (0=dark, 1=bright).
+    float excitationBrightness = 0.6f;  // Excitation hardness / brightness.
+    float excitationVelocity = 0.5f;    // Velocity modulation sensitivity.
+    float excitationMix = 1.0f;   // 0 = Impulse (pick), 1 = Noise
+    float pickPosition = 0.5f;   // Pick position along string (0-1).
+    float dispersionAmount = 0.12f;  // Dispersion amount (0 disables).
+    float bodyTone = 0.5f;       // Body tone color.
+    float bodySize = 0.5f;       // Body size scaling.
+    float roomAmount = 0.0f;     // Room/wet amount.
     NoiseType noiseType = NoiseType::White;
     bool enableLowpass = true;
-    unsigned int seed = 0;  // 随机噪声种子，0 表示使用 random_device
+    unsigned int seed = 0;  // Noise RNG seed (0 uses random_device).
     ExcitationMode excitationMode = ExcitationMode::RandomNoisePick;
 };
 
@@ -39,15 +40,19 @@ public:
     KarplusStrongString(KarplusStrongString&&) noexcept;
     KarplusStrongString& operator=(KarplusStrongString&&) noexcept;
 
-    // 预渲染整段样本（离线用途）
+    // Offline render for a whole note.
     std::vector<float> pluck(double frequency, double durationSeconds,
                              float velocity = 1.0f);
-    // 启动持续性的弦震动，用于实时 voice 播放
+    // Start a real-time pluck.
     void start(double frequency, float velocity = 1.0f);
-    // 拉取单个样本；未启动时返回 0
+    // Pull one sample; returns 0 if inactive.
     float processSample();
     bool active() const { return active_; }
     float lastOutput() const { return lastOutput_; }
+
+    // Preview current excitation buffer (delayBuffer_). For visualization/analysis.
+    // Typically read after start() and before processSample(). maxSamples=0 = no truncation.
+    std::vector<float> excitationBufferPreview(std::size_t maxSamples = 0) const;
 
     const StringConfig& config() const { return config_; }
     void updateConfig(const StringConfig& config);

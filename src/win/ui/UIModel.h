@@ -49,6 +49,7 @@ struct FlowDiagramState {
     float bodyTone = 0.0f;
     float roomAmount = 0.0f;
     int noiseType = 0;  // 0 = White, 1 = Binary（或项目内部约定）
+    std::vector<float> excitationSamples;  // 激励瞬态/包络预览（用于 Excitation Scope）
     FlowModule highlightedModule = FlowModule::kNone;
 };
 

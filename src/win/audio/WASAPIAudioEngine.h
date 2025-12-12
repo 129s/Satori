@@ -15,7 +15,7 @@
 
 namespace winaudio {
 
-/// 音频渲染回调，外部负责填充 stereo/mono float buffer。
+/// Audio render callback. Caller fills stereo/mono float buffer.
 using RenderCallback = std::function<void(float* output, std::size_t frames)>;
 
 struct AudioEngineConfig {

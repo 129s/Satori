@@ -11,6 +11,7 @@ enum class ParamId {
     DispersionAmount,
     ExcitationBrightness,
     ExcitationVelocity,
+    ExcitationMix,
     BodyTone,
     BodySize,
     RoomAmount,
