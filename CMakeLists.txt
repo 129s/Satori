@@ -19,9 +19,15 @@ if (MSVC)
     add_compile_options(/utf-8)
 endif()
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 add_library(SatoriCoreLib STATIC
     src/audio/WaveWriter.cpp
     src/dsp/Filter.cpp
+    src/dsp/Fft.cpp
+    src/dsp/PartitionedConvolver.cpp
+    src/dsp/ConvolutionReverb.cpp
+    src/dsp/RoomIrLibrary.cpp
     src/engine/StringParams.cpp
     src/engine/StringSynthEngine.cpp
     src/synthesis/KarplusStrongString.cpp
@@ -29,6 +35,33 @@ add_library(SatoriCoreLib STATIC
 )
 
 target_include_directories(SatoriCoreLib PUBLIC src)
+
+# Build-time embedding of IR WAVs into compiled C++ arrays (no runtime file IO).
+set(SATORI_IR_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/ir_src")
+file(GLOB SATORI_IR_WAVS CONFIGURE_DEPENDS "${SATORI_IR_SRC_DIR}/*.wav")
+if (NOT SATORI_IR_WAVS)
+    message(FATAL_ERROR "Missing room IR WAVs: ${SATORI_IR_SRC_DIR}/*.wav")
+endif()
+set(SATORI_IR_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/room_ir")
+set(SATORI_IR_DATA_H "${SATORI_IR_GEN_DIR}/RoomIrData.h")
+set(SATORI_IR_DATA_CPP "${SATORI_IR_GEN_DIR}/RoomIrData.cpp")
+add_custom_command(
+    OUTPUT "${SATORI_IR_DATA_H}" "${SATORI_IR_DATA_CPP}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${SATORI_IR_GEN_DIR}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_room_ir_data.py"
+            --input_dir "${SATORI_IR_SRC_DIR}"
+            --out_h "${SATORI_IR_DATA_H}"
+            --out_cpp "${SATORI_IR_DATA_CPP}"
+            --preview 512
+    DEPENDS ${SATORI_IR_WAVS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_room_ir_data.py"
+    VERBATIM
+)
+add_custom_target(SatoriRoomIrData DEPENDS "${SATORI_IR_DATA_H}" "${SATORI_IR_DATA_CPP}")
+add_dependencies(SatoriCoreLib SatoriRoomIrData)
+target_sources(SatoriCoreLib PRIVATE "${SATORI_IR_DATA_CPP}" "${SATORI_IR_DATA_H}")
+target_include_directories(SatoriCoreLib PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 if (WIN32)
     set(NUNITO_FONT_FILE "${SATORI_FONTS_DIR}/Nunito-Regular.ttf")
@@ -75,7 +108,10 @@ if (WIN32)
         src/win/ui/nodes/TopBarNode.cpp
         src/win/ui/nodes/KnobPanelNode.cpp
         src/win/ui/nodes/FlowDiagramNode.cpp
+        src/win/ui/nodes/ModuleCardNode.cpp
         src/win/ui/nodes/ModulePreviewNode.cpp
+        src/win/ui/nodes/DropdownSelectorNode.cpp
+        src/win/ui/nodes/RoomReverbPreviewNode.cpp
         src/win/ui/nodes/KeyboardNode.cpp
         src/win/ui/VirtualKeyboard.cpp
         src/win/ui/WaveformView.cpp
@@ -124,6 +160,7 @@ target_include_directories(Catch2Amalgamated PUBLIC third_party/catch2)
 set(TEST_SOURCES
     tests/main.cpp
     tests/core_tests.cpp
+    tests/convolution_reverb_tests.cpp
     tests/string_params_tests.cpp
     tests/voice_manager_tests.cpp
 )

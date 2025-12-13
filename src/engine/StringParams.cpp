@@ -4,6 +4,8 @@
 #include <cctype>
 #include <string>
 
+#include "dsp/RoomIrLibrary.h"
+
 namespace engine {
 
 namespace {
@@ -18,25 +20,32 @@ std::string ToLower(std::string_view value) {
 }  // namespace
 
 const std::vector<ParamInfo>& GetParamInfoList() {
-    static const std::vector<ParamInfo> kParams = {
-        {ParamId::Decay, "decay", ParamType::Float, 0.90f, 0.999f, 0.996f},
-        {ParamId::Brightness, "brightness", ParamType::Float, 0.0f, 1.0f, 0.5f},
-        {ParamId::DispersionAmount, "dispersionAmount", ParamType::Float, 0.0f, 1.0f,
-         0.12f},
-        {ParamId::ExcitationBrightness, "excitationBrightness", ParamType::Float, 0.0f, 1.0f,
-         0.6f},
-        {ParamId::ExcitationVelocity, "excitationVelocity", ParamType::Float, 0.0f, 1.0f,
-         0.5f},
-        {ParamId::ExcitationMix, "excitationMix", ParamType::Float, 0.0f, 1.0f, 1.0f},
-        {ParamId::BodyTone, "bodyTone", ParamType::Float, 0.0f, 1.0f, 0.5f},
-        {ParamId::BodySize, "bodySize", ParamType::Float, 0.0f, 1.0f, 0.5f},
-        {ParamId::RoomAmount, "roomAmount", ParamType::Float, 0.0f, 1.0f, 0.0f},
-        {ParamId::PickPosition, "pickPosition", ParamType::Float, 0.05f, 0.95f, 0.5f},
-        {ParamId::EnableLowpass, "enableLowpass", ParamType::Bool, 0.0f, 1.0f, 1.0f},
-        {ParamId::NoiseType, "noiseType", ParamType::Enum, 0.0f, 1.0f, 0.0f},
-        {ParamId::MasterGain, "masterGain", ParamType::Float, 0.0f, 2.0f, 1.0f},
-        {ParamId::AmpRelease, "ampRelease", ParamType::Float, 0.01f, 5.0f, 0.35f},
-    };
+    static const std::vector<ParamInfo> kParams = [] {
+        const float maxIr =
+            std::max(0.0f,
+                     static_cast<float>(std::max<std::size_t>(1, dsp::RoomIrLibrary::list().size()) - 1));
+        return std::vector<ParamInfo>{
+            {ParamId::Decay, "decay", ParamType::Float, 0.90f, 0.999f, 0.996f},
+            {ParamId::Brightness, "brightness", ParamType::Float, 0.0f, 1.0f, 0.5f},
+            {ParamId::DispersionAmount, "dispersionAmount", ParamType::Float, 0.0f, 1.0f,
+             0.12f},
+            {ParamId::ExcitationBrightness, "excitationBrightness", ParamType::Float, 0.0f, 1.0f,
+             0.6f},
+            {ParamId::ExcitationVelocity, "excitationVelocity", ParamType::Float, 0.0f, 1.0f,
+             0.5f},
+            {ParamId::ExcitationMix, "excitationMix", ParamType::Float, 0.0f, 1.0f, 1.0f},
+            {ParamId::BodyTone, "bodyTone", ParamType::Float, 0.0f, 1.0f, 0.5f},
+            {ParamId::BodySize, "bodySize", ParamType::Float, 0.0f, 1.0f, 0.5f},
+            {ParamId::RoomAmount, "roomAmount", ParamType::Float, 0.0f, 1.0f, 0.0f},
+            // Discrete IR selection for the convolution reverb.
+            {ParamId::RoomIR, "roomIR", ParamType::Enum, 0.0f, maxIr, 0.0f},
+            {ParamId::PickPosition, "pickPosition", ParamType::Float, 0.05f, 0.95f, 0.5f},
+            {ParamId::EnableLowpass, "enableLowpass", ParamType::Bool, 0.0f, 1.0f, 1.0f},
+            {ParamId::NoiseType, "noiseType", ParamType::Enum, 0.0f, 1.0f, 0.0f},
+            {ParamId::MasterGain, "masterGain", ParamType::Float, 0.0f, 2.0f, 1.0f},
+            {ParamId::AmpRelease, "ampRelease", ParamType::Float, 0.01f, 5.0f, 0.35f},
+        };
+    }();
     return kParams;
 }
 

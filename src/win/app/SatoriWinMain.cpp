@@ -16,6 +16,7 @@
 #include "win/ui/Direct2DContext.h"
 #include "win/ui/KeyboardKeymap.h"
 #include "win/ui/UIModel.h"
+#include "dsp/RoomIrLibrary.h"
 
 namespace {
 
@@ -144,10 +145,14 @@ winui::FlowDiagramState SatoriAppState::buildDiagramState() const {
     diagram.dispersionAmount = synthConfig_.dispersionAmount;
     diagram.pickPosition = synthConfig_.pickPosition;
     diagram.bodyTone = synthConfig_.bodyTone;
+    diagram.bodySize = synthConfig_.bodySize;
     diagram.roomAmount = synthConfig_.roomAmount;
+    diagram.roomIrIndex = synthConfig_.roomIrIndex;
     diagram.noiseType =
         (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
     diagram.excitationSamples = excitationSamples_;
+    diagram.roomIrPreviewSamples =
+        dsp::RoomIrLibrary::previewMono(synthConfig_.roomIrIndex, 1024);
     diagram.highlightedModule = winui::FlowModule::kNone;
     return diagram;
 }
@@ -342,7 +347,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
     winui::ModuleUI roomModule =
         makeModule(L"ROOM", winui::FlowModule::kRoom, true);
     roomModule.params.push_back(
-        makeParam(L"Room Amount", 0.0f, 1.0f,
+        makeParam(L"Mix", 0.0f, 1.0f,
                   [this]() { return synthConfig_.roomAmount; },
                   [this](float value) {
                       synthConfig_.roomAmount = value;
@@ -350,6 +355,21 @@ winui::UIModel SatoriAppState::buildUIModel() {
                       refreshWaveformPreview();
                   },
                   winui::FlowModule::kRoom, true));
+    {
+        const float maxIr =
+            std::max(0.0f,
+                     static_cast<float>(std::max<std::size_t>(1, dsp::RoomIrLibrary::list().size()) - 1));
+        roomModule.params.push_back(
+            makeParam(L"IR", 0.0f, maxIr,
+                      [this]() { return static_cast<float>(synthConfig_.roomIrIndex); },
+                      [this](float value) {
+                          const int idx = static_cast<int>(std::lround(value));
+                          synthConfig_.roomIrIndex = std::max(0, idx);
+                          syncSynthConfig();
+                          refreshWaveformPreview();
+                      },
+                      winui::FlowModule::kRoom, false));
+    }
     roomModule.params.push_back(
         makeParam(L"Master Gain", 0.0f, 2.0f,
                   [this]() { return masterGain_; },
@@ -393,10 +413,10 @@ void SatoriAppState::refreshUI() {
 void SatoriAppState::updateAudioStatus(bool showDialog) {
     if (audioReady_) {
         std::wstringstream ss;
-        ss << L"音频：在线 (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz)";
+        ss << L"????? (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz)";
         audioStatus_ = ss.str();
     } else {
-        std::wstring message = L"音频：离线";
+        std::wstring message = L"?????";
         if (engine_) {
             const auto& lastError = engine_->lastError();
             if (!lastError.empty()) {

@@ -25,6 +25,7 @@ struct StringConfig {
     float bodyTone = 0.5f;       // Body tone color.
     float bodySize = 0.5f;       // Body size scaling.
     float roomAmount = 0.0f;     // Room/wet amount.
+    int roomIrIndex = 0;         // Built-in IR selection (index into IR library).
     NoiseType noiseType = NoiseType::White;
     bool enableLowpass = true;
     unsigned int seed = 0;  // Noise RNG seed (0 uses random_device).

@@ -34,6 +34,9 @@ class ButtonBarNode;
 class KeyboardNode;
 class WaveformNode;
 class ModulePreviewNode;
+class ModuleCardNode;
+class DropdownSelectorNode;
+class RoomReverbPreviewNode;
 
 class Direct2DContext {
 public:
@@ -85,7 +88,11 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> trackBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fillBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> panelBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cardBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> shadowBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> gridBrush_;
+    Microsoft::WRL::ComPtr<ID2D1GradientStopCollection> accentFillStops_;
+    Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> accentFillBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardWhiteFillBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardWhitePressedBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardWhiteTextBrush_;
@@ -125,7 +132,13 @@ private:
     std::shared_ptr<ModulePreviewNode> excitationPreviewNode_;
     std::shared_ptr<ModulePreviewNode> stringPreviewNode_;
     std::shared_ptr<ModulePreviewNode> bodyPreviewNode_;
-    std::shared_ptr<ModulePreviewNode> roomPreviewNode_;
+    std::shared_ptr<UILayoutNode> roomPreviewNode_;
+    std::shared_ptr<RoomReverbPreviewNode> roomReverbPreviewNode_;
+    std::shared_ptr<DropdownSelectorNode> roomIrSelectorNode_;
+    std::shared_ptr<ModuleCardNode> excitationCardNode_;
+    std::shared_ptr<ModuleCardNode> stringCardNode_;
+    std::shared_ptr<ModuleCardNode> bodyCardNode_;
+    std::shared_ptr<ModuleCardNode> roomCardNode_;
 
     std::shared_ptr<KnobPanelNode> excitationKnobsNode_;
     std::shared_ptr<KnobPanelNode> stringKnobsNode_;

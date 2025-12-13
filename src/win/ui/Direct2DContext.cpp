@@ -11,13 +11,17 @@
 #include "win/ui/NunitoFont.h"
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
+#include "dsp/RoomIrLibrary.h"
 #include "win/ui/nodes/FlowDiagramNode.h"
 #include "win/ui/nodes/ButtonBarNode.h"
 #include "win/ui/nodes/KnobPanelNode.h"
 #include "win/ui/nodes/KeyboardNode.h"
 #include "win/ui/nodes/TopBarNode.h"
 #include "win/ui/nodes/WaveformNode.h"
+#include "win/ui/nodes/ModuleCardNode.h"
 #include "win/ui/nodes/ModulePreviewNode.h"
+#include "win/ui/nodes/DropdownSelectorNode.h"
+#include "win/ui/nodes/RoomReverbPreviewNode.h"
 #include "win/ui/layout/UIHorizontalStack.h"
 #include "win/ui/layout/UIStackPanel.h"
 
@@ -41,6 +45,7 @@ struct SkinBrushColors {
     D2D1_COLOR_F track{};
     D2D1_COLOR_F fill{};
     D2D1_COLOR_F panel{};
+    D2D1_COLOR_F card{};
     D2D1_COLOR_F grid{};
 };
 
@@ -52,7 +57,10 @@ SkinBrushColors MakeBrushColors() {
     colors.text = D2D1::ColorF(0.92f, 0.92f, 0.92f, 1.0f);
     colors.track = D2D1::ColorF(0.17f, 0.17f, 0.17f, 1.0f); // #2B2B2B
     colors.fill = D2D1::ColorF(0.22f, 0.22f, 0.22f, 1.0f);  // secondary fill
-    colors.panel = D2D1::ColorF(0.12f, 0.12f, 0.12f, 1.0f); // card background #1E1E1E
+    // "Panel" is the darker content surface used behind knobs and visualizers.
+    colors.panel = D2D1::ColorF(0.12f, 0.12f, 0.12f, 1.0f); // #1E1E1E
+    // "Card" is the module container background.
+    colors.card = D2D1::ColorF(0.172549f, 0.172549f, 0.172549f, 1.0f);  // #2C2C2C
     colors.grid = D2D1::ColorF(0.45f, 0.45f, 0.45f, 0.25f); // subtle helpers
     return colors;
 }
@@ -201,9 +209,7 @@ void Direct2DContext::setModel(UIModel model) {
 void Direct2DContext::updateWaveformSamples(
     const std::vector<float>& samples) {
     model_.waveformSamples = samples;
-    if (roomPreviewNode_) {
-        roomPreviewNode_->setWaveformSamples(samples);
-    }
+    // Room preview uses the selected IR waveform (updated via FlowDiagramState), not output waveform samples.
 }
 
 void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
@@ -217,8 +223,8 @@ void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
     if (bodyPreviewNode_) {
         bodyPreviewNode_->setDiagramState(state);
     }
-    if (roomPreviewNode_) {
-        roomPreviewNode_->setDiagramState(state);
+    if (roomReverbPreviewNode_) {
+        roomReverbPreviewNode_->setDiagramState(state);
     }
 }
 
@@ -236,6 +242,22 @@ bool Direct2DContext::onPointerDown(float x, float y) {
     lastPointerPosition_ = D2D1::Point2F(x, y);
 #endif
     bool handled = false;
+    // If a dropdown is open, route the click to its overlay first so it can
+    // select/close without underlying knobs reacting.
+    if (roomIrSelectorNode_ && roomIrSelectorNode_->isOpen()) {
+        handled = roomIrSelectorNode_->onOverlayPointerDown(x, y);
+        if (handled) {
+#if SATORI_UI_DEBUG_ENABLED
+            const bool selectionChanged = updateDebugSelection(x, y);
+            pointerCaptured_ = true;
+            (void)selectionChanged;
+            return true;
+#else
+            pointerCaptured_ = true;
+            return true;
+#endif
+        }
+    }
     if (rootLayout_) {
         handled = rootLayout_->onPointerDown(x, y);
     }
@@ -255,6 +277,18 @@ bool Direct2DContext::onPointerMove(float x, float y) {
     lastPointerPosition_ = D2D1::Point2F(x, y);
 #endif
     bool handled = false;
+    if (roomIrSelectorNode_ && roomIrSelectorNode_->isOpen()) {
+        handled = roomIrSelectorNode_->onOverlayPointerMove(x, y);
+        if (handled) {
+#if SATORI_UI_DEBUG_ENABLED
+            const bool selectionChanged = updateDebugSelection(x, y);
+            (void)selectionChanged;
+            return true;
+#else
+            return true;
+#endif
+        }
+    }
     if (rootLayout_) {
         handled = rootLayout_->onPointerMove(x, y);
     }
@@ -442,7 +476,38 @@ bool Direct2DContext::createDeviceResources() {
     if (FAILED(hr)) {
         return false;
     }
+    hr = renderTarget_->CreateSolidColorBrush(colors.card, &cardBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    // Subtle shadow used by card containers (cheap, no blur).
+    hr = renderTarget_->CreateSolidColorBrush(
+        D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.30f), &shadowBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
     hr = renderTarget_->CreateSolidColorBrush(colors.grid, &gridBrush_);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    // Accent gradient fill for visualizers (top->bottom fade to transparent).
+    D2D1_GRADIENT_STOP stops[2]{};
+    stops[0].position = 0.0f;
+    stops[0].color = D2D1::ColorF(colors.accent.r, colors.accent.g, colors.accent.b, 0.22f);
+    stops[1].position = 1.0f;
+    stops[1].color = D2D1::ColorF(colors.accent.r, colors.accent.g, colors.accent.b, 0.0f);
+    hr = renderTarget_->CreateGradientStopCollection(
+        stops, 2,
+        D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &accentFillStops_);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = renderTarget_->CreateLinearGradientBrush(
+        D2D1::LinearGradientBrushProperties(D2D1::Point2F(0.0f, 0.0f),
+                                            D2D1::Point2F(0.0f, 100.0f)),
+        accentFillStops_.Get(),
+        &accentFillBrush_);
     if (FAILED(hr)) {
         return false;
     }
@@ -509,10 +574,14 @@ bool Direct2DContext::createDeviceResources() {
 void Direct2DContext::discardDeviceResources() {
     accentBrush_.Reset();
     excitationBrush_.Reset();
+    accentFillBrush_.Reset();
+    accentFillStops_.Reset();
     textBrush_.Reset();
     trackBrush_.Reset();
     fillBrush_.Reset();
     panelBrush_.Reset();
+    cardBrush_.Reset();
+    shadowBrush_.Reset();
     gridBrush_.Reset();
     keyboardWhiteFillBrush_.Reset();
     keyboardWhitePressedBrush_.Reset();
@@ -536,7 +605,9 @@ void Direct2DContext::render() {
     renderTarget_->BeginDraw();
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    D2D1_COLOR_F clearColor = D2D1::ColorF(0.07f, 0.07f, 0.07f);
+    // Global background (not pure black) to preserve hierarchy against module cards.
+    D2D1_COLOR_F clearColor =
+        D2D1::ColorF(0.117647f, 0.117647f, 0.117647f);  // #1E1E1E
     renderTarget_->Clear(clearColor);
 
     if (rootLayout_) {
@@ -563,7 +634,10 @@ void Direct2DContext::render() {
         if (excitationPreviewNode_) excitationPreviewNode_->setHighlighted(highlight == FlowModule::kExcitation);
         if (stringPreviewNode_) stringPreviewNode_->setHighlighted(highlight == FlowModule::kString);
         if (bodyPreviewNode_) bodyPreviewNode_->setHighlighted(highlight == FlowModule::kBody);
-        if (roomPreviewNode_) roomPreviewNode_->setHighlighted(highlight == FlowModule::kRoom);
+        if (excitationCardNode_) excitationCardNode_->setHighlighted(highlight == FlowModule::kExcitation);
+        if (stringCardNode_) stringCardNode_->setHighlighted(highlight == FlowModule::kString);
+        if (bodyCardNode_) bodyCardNode_->setHighlighted(highlight == FlowModule::kBody);
+        if (roomCardNode_) roomCardNode_->setHighlighted(highlight == FlowModule::kRoom);
 
         auto resources = makeResources();
         rootLayout_->draw(resources);
@@ -581,6 +655,10 @@ void Direct2DContext::render() {
                drawActiveTooltip(stringKnobsNode_) ||
                drawActiveTooltip(bodyKnobsNode_) ||
                drawActiveTooltip(roomKnobsNode_));
+        // Draw dropdown overlay last so it appears above knobs/cards.
+        if (roomIrSelectorNode_ && roomIrSelectorNode_->isOpen()) {
+            roomIrSelectorNode_->drawOverlay(resources);
+        }
 #if SATORI_UI_DEBUG_ENABLED
         drawDebugOverlay();
 #endif
@@ -612,7 +690,19 @@ void Direct2DContext::rebuildLayout() {
     excitationPreviewNode_ = makePreview(FlowModule::kExcitation);
     stringPreviewNode_ = makePreview(FlowModule::kString);
     bodyPreviewNode_ = makePreview(FlowModule::kBody);
-    roomPreviewNode_ = makePreview(FlowModule::kRoom);
+    roomReverbPreviewNode_ = std::make_shared<RoomReverbPreviewNode>();
+    roomReverbPreviewNode_->setDiagramState(model_.diagram);
+    roomPreviewNode_ = roomReverbPreviewNode_;
+    roomIrSelectorNode_ = roomReverbPreviewNode_->selector();
+    if (roomIrSelectorNode_) {
+        std::vector<std::wstring> names;
+        for (const auto& ir : dsp::RoomIrLibrary::list()) {
+            // Names are ASCII in the built-in library; widen for DWrite.
+            names.emplace_back(ir.displayName.begin(), ir.displayName.end());
+        }
+        roomIrSelectorNode_->setItems(std::move(names));
+        roomIrSelectorNode_->setPageSize(6);
+    }
 
     // Bind Excitation "Position" to an interactive slider inside the preview card.
     auto findParam = [&](FlowModule module,
@@ -634,6 +724,21 @@ void Direct2DContext::rebuildLayout() {
                 });
         }
     }
+    // Bind Room "IR" param to the dropdown selector (if available).
+    if (roomIrSelectorNode_) {
+        if (const auto* irParam = findParam(FlowModule::kRoom, L"IR")) {
+            if (irParam->getter) {
+                roomIrSelectorNode_->setSelectedIndex(
+                    static_cast<int>(std::lround(irParam->getter())));
+            }
+            roomIrSelectorNode_->setOnChanged(
+                [setter = irParam->setter](int index) {
+                    if (setter) {
+                        setter(static_cast<float>(index));
+                    }
+                });
+        }
+    }
 
     auto makeKnobs = [&](FlowModule module) {
         auto node = std::make_shared<KnobPanelNode>();
@@ -641,7 +746,10 @@ void Direct2DContext::rebuildLayout() {
         std::vector<ModuleUI> filtered;
         for (const auto& m : model_.modules) {
             if (m.module == module) {
-                filtered.push_back(m);
+                // The module header is rendered by the preview region; avoid duplicating it here.
+                ModuleUI copy = m;
+                copy.title.clear();
+                filtered.push_back(std::move(copy));
             }
         }
         node->setModules(filtered, /*surfaceOnly=*/true, /*compactLayout=*/false);
@@ -659,28 +767,22 @@ void Direct2DContext::rebuildLayout() {
     keyboardNode_->setColors(keyboardColors_);
     keyboardNode_->setConfig(model_.keyboardConfig, model_.keyCallback);
 
-    // Four vertical module columns.
-    auto makeColumn = [&](std::shared_ptr<ModulePreviewNode> preview,
-                          std::shared_ptr<KnobPanelNode> knobs) {
-        auto col = std::make_shared<UIStackPanel>(8.0f);
-        col->setItems({
-            {preview, {UISizeMode::kAuto, 0.0f, 180.0f}},
-            {knobs, {UISizeMode::kAuto, 0.0f, 220.0f}},
-        });
-        return col;
-    };
-
-    auto excitationCol = makeColumn(excitationPreviewNode_, excitationKnobsNode_);
-    auto stringCol = makeColumn(stringPreviewNode_, stringKnobsNode_);
-    auto bodyCol = makeColumn(bodyPreviewNode_, bodyKnobsNode_);
-    auto roomCol = makeColumn(roomPreviewNode_, roomKnobsNode_);
+    // Four module cards aligned to the signal flow.
+    excitationCardNode_ = std::make_shared<ModuleCardNode>(
+        FlowModule::kExcitation, excitationPreviewNode_, excitationKnobsNode_);
+    stringCardNode_ = std::make_shared<ModuleCardNode>(
+        FlowModule::kString, stringPreviewNode_, stringKnobsNode_);
+    bodyCardNode_ = std::make_shared<ModuleCardNode>(
+        FlowModule::kBody, bodyPreviewNode_, bodyKnobsNode_);
+    roomCardNode_ = std::make_shared<ModuleCardNode>(
+        FlowModule::kRoom, roomPreviewNode_, roomKnobsNode_);
 
     auto mainRow = std::make_shared<UIHorizontalStack>(12.0f);
     mainRow->setItems({
-        {excitationCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
-        {stringCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
-        {bodyCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
-        {roomCol, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {excitationCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {stringCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {bodyCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {roomCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
     });
     mainRow_ = mainRow;
 
@@ -854,10 +956,13 @@ RenderResources Direct2DContext::makeResources() {
     resources.target = renderTarget_.Get();
     resources.accentBrush = accentBrush_.Get();
     resources.excitationBrush = excitationBrush_.Get();
+    resources.accentFillBrush = accentFillBrush_.Get();
     resources.textBrush = textBrush_.Get();
     resources.trackBrush = trackBrush_.Get();
     resources.fillBrush = fillBrush_.Get();
     resources.panelBrush = panelBrush_.Get();
+    resources.cardBrush = cardBrush_.Get();
+    resources.shadowBrush = shadowBrush_.Get();
     resources.gridBrush = gridBrush_.Get();
     resources.textFormat = textFormat_.Get();
     resources.skinId = skinConfig_.id;

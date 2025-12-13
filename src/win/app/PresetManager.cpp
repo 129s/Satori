@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <optional>
 #include <sstream>
 
+#include "dsp/RoomIrLibrary.h"
 #include "engine/StringParams.h"
 #include "engine/StringSynthEngine.h"
 
@@ -19,7 +21,8 @@ std::string ToLower(std::string value) {
     return value;
 }
 
-std::optional<std::string> ExtractValue(const std::string& text, const std::string& key) {
+std::optional<std::string> ExtractValue(const std::string& text,
+                                        const std::string& key) {
     const std::string needle = "\"" + key + "\"";
     const auto keyPos = text.find(needle);
     if (keyPos == std::string::npos) {
@@ -115,7 +118,7 @@ bool PresetManager::load(const std::filesystem::path& path,
                          std::wstring& errorMessage) const {
     std::ifstream stream(path);
     if (!stream.is_open()) {
-        errorMessage = L"无法打开预设文件: " + path.wstring();
+        errorMessage = L"Failed to open preset file: " + path.wstring();
         return false;
     }
     std::stringstream buffer;
@@ -132,12 +135,12 @@ bool PresetManager::save(const std::filesystem::path& path,
     std::filesystem::create_directories(path.parent_path(), ec);
     std::ofstream stream(path, std::ios::binary);
     if (!stream.is_open()) {
-        errorMessage = L"无法写入预设文件: " + path.wstring();
+        errorMessage = L"Failed to write preset file: " + path.wstring();
         return false;
     }
     stream << serialize(config, masterGain, ampRelease);
     if (!stream.good()) {
-        errorMessage = L"写入预设内容失败: " + path.wstring();
+        errorMessage = L"Failed to write preset content: " + path.wstring();
         return false;
     }
     return true;
@@ -153,138 +156,89 @@ bool PresetManager::parse(const std::string& content,
     params.setParam(engine::ParamId::AmpRelease, ampRelease);
 
     bool ok = false;
-    if (auto decay = ExtractValue(content, "decay")) {
-        const float value = ParseFloat(*decay, ok);
+
+    auto setFloat = [&](const char* key, engine::ParamId id) -> bool {
+        if (auto v = ExtractValue(content, key)) {
+            const float value = ParseFloat(*v, ok);
+            if (!ok) {
+                errorMessage = L"Failed to parse preset float field";
+                return false;
+            }
+            params.setParam(id, value);
+        }
+        return true;
+    };
+
+    if (!setFloat("decay", engine::ParamId::Decay)) return false;
+    if (!setFloat("brightness", engine::ParamId::Brightness)) return false;
+    if (!setFloat("excitationBrightness", engine::ParamId::ExcitationBrightness)) return false;
+    if (!setFloat("excitationVelocity", engine::ParamId::ExcitationVelocity)) return false;
+    if (!setFloat("excitationMix", engine::ParamId::ExcitationMix)) return false;
+    if (!setFloat("dispersionAmount", engine::ParamId::DispersionAmount)) return false;
+    if (!setFloat("bodyTone", engine::ParamId::BodyTone)) return false;
+    if (!setFloat("bodySize", engine::ParamId::BodySize)) return false;
+    if (!setFloat("pickPosition", engine::ParamId::PickPosition)) return false;
+    if (!setFloat("masterGain", engine::ParamId::MasterGain)) return false;
+    if (!setFloat("ampRelease", engine::ParamId::AmpRelease)) return false;
+
+    // Room mix: prefer new field; fall back to legacy.
+    if (auto mix = ExtractValue(content, "roomMix")) {
+        const float value = ParseFloat(*mix, ok);
         if (!ok) {
-            errorMessage = L"解析 decay 失败";
+            errorMessage = L"Failed to parse roomMix";
             return false;
         }
-        params.setParam(engine::ParamId::Decay, value);
-    }
-    if (auto brightness = ExtractValue(content, "brightness")) {
-        const float value = ParseFloat(*brightness, ok);
+        params.setParam(engine::ParamId::RoomAmount, value);
+    } else if (auto amount = ExtractValue(content, "roomAmount")) {
+        const float value = ParseFloat(*amount, ok);
         if (!ok) {
-            errorMessage = L"解析 brightness 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::Brightness, value);
-    }
-    if (auto exciteColor = ExtractValue(content, "excitationBrightness")) {
-        const float value = ParseFloat(*exciteColor, ok);
-        if (!ok) {
-            errorMessage = L"解析 excitationBrightness 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::ExcitationBrightness, value);
-    }
-    if (auto exciteVel = ExtractValue(content, "excitationVelocity")) {
-        const float value = ParseFloat(*exciteVel, ok);
-        if (!ok) {
-            errorMessage = L"解析 excitationVelocity 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::ExcitationVelocity, value);
-    }
-    if (auto exciteMix = ExtractValue(content, "excitationMix")) {
-        const float value = ParseFloat(*exciteMix, ok);
-        if (!ok) {
-            errorMessage = L"解析 excitationMix 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::ExcitationMix, value);
-    }
-    if (auto bodyTone = ExtractValue(content, "bodyTone")) {
-        const float value = ParseFloat(*bodyTone, ok);
-        if (!ok) {
-            errorMessage = L"解析 bodyTone 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::BodyTone, value);
-    }
-    if (auto bodySize = ExtractValue(content, "bodySize")) {
-        const float value = ParseFloat(*bodySize, ok);
-        if (!ok) {
-            errorMessage = L"解析 bodySize 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::BodySize, value);
-    }
-    if (auto room = ExtractValue(content, "roomAmount")) {
-        const float value = ParseFloat(*room, ok);
-        if (!ok) {
-            errorMessage = L"解析 roomAmount 失败";
+            errorMessage = L"Failed to parse roomAmount";
             return false;
         }
         params.setParam(engine::ParamId::RoomAmount, value);
     }
-    if (auto dispersion = ExtractValue(content, "dispersionAmount")) {
-        const float value = ParseFloat(*dispersion, ok);
-        if (!ok) {
-            errorMessage = L"解析 dispersionAmount 失败";
-            return false;
+
+    // Room IR (stable ID).
+    if (auto ir = ExtractValue(content, "roomIR")) {
+        const int idx = dsp::RoomIrLibrary::findIndexById(*ir);
+        if (idx >= 0) {
+            params.setParam(engine::ParamId::RoomIR, static_cast<float>(idx));
         }
-        params.setParam(engine::ParamId::DispersionAmount, value);
     }
-    if (auto pickPos = ExtractValue(content, "pickPosition")) {
-        const float value = ParseFloat(*pickPos, ok);
-        if (!ok) {
-            errorMessage = L"解析 pickPosition 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::PickPosition, value);
-    }
+
     if (auto lowpass = ExtractValue(content, "enableLowpass")) {
         const bool value = ParseBool(*lowpass, ok);
         if (!ok) {
-            errorMessage = L"解析 enableLowpass 失败";
+            errorMessage = L"Failed to parse enableLowpass";
             return false;
         }
         params.setParam(engine::ParamId::EnableLowpass, value ? 1.0f : 0.0f);
     }
+
     if (auto noise = ExtractValue(content, "noiseType")) {
-        auto lower = ToLower(*noise);
-        if (lower == "binary") {
-            params.setParam(engine::ParamId::NoiseType, 1.0f);
-        } else {
-            params.setParam(engine::ParamId::NoiseType, 0.0f);
-        }
-    }
-    if (auto gain = ExtractValue(content, "masterGain")) {
-        const float value = ParseFloat(*gain, ok);
-        if (!ok) {
-            errorMessage = L"解析 masterGain 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::MasterGain, value);
-    }
-    if (auto release = ExtractValue(content, "ampRelease")) {
-        const float value = ParseFloat(*release, ok);
-        if (!ok) {
-            errorMessage = L"解析 ampRelease 失败";
-            return false;
-        }
-        params.setParam(engine::ParamId::AmpRelease, value);
+        const auto lower = ToLower(*noise);
+        params.setParam(engine::ParamId::NoiseType, lower == "binary" ? 1.0f : 0.0f);
     }
 
-    synthesis::StringConfig parsedConfig = params.stringConfig();
+    synthesis::StringConfig parsed = params.stringConfig();
 
     if (auto excitationMode = ExtractValue(content, "excitationMode")) {
         const auto mode = ParseExcitationMode(*excitationMode, ok);
         if (!ok) {
-            errorMessage = L"解析 excitationMode 失败";
+            errorMessage = L"Failed to parse excitationMode";
             return false;
         }
-        parsedConfig.excitationMode = mode;
+        parsed.excitationMode = mode;
     }
     if (auto seed = ExtractValue(content, "seed")) {
-        parsedConfig.seed = ParseUint(*seed, ok);
+        parsed.seed = ParseUint(*seed, ok);
         if (!ok) {
-            errorMessage = L"解析 seed 失败";
+            errorMessage = L"Failed to parse seed";
             return false;
         }
     }
 
-    config = parsedConfig;
+    config = parsed;
     masterGain = params.getParam(engine::ParamId::MasterGain);
     ampRelease = params.getParam(engine::ParamId::AmpRelease);
     return true;
@@ -293,6 +247,14 @@ bool PresetManager::parse(const std::string& content,
 std::string PresetManager::serialize(const synthesis::StringConfig& config,
                                      float masterGain,
                                      float ampRelease) {
+    const auto& irList = dsp::RoomIrLibrary::list();
+    std::string roomIrId = "small-room";
+    if (!irList.empty()) {
+        const int idx = std::clamp(config.roomIrIndex, 0,
+                                   static_cast<int>(irList.size() - 1));
+        roomIrId = std::string(irList[static_cast<std::size_t>(idx)].id);
+    }
+
     std::ostringstream oss;
     oss << "{\n"
         << "  \"decay\": " << config.decay << ",\n"
@@ -303,14 +265,16 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
         << "  \"bodyTone\": " << config.bodyTone << ",\n"
         << "  \"bodySize\": " << config.bodySize << ",\n"
+        << "  \"roomMix\": " << config.roomAmount << ",\n"
+        << "  \"roomIR\": \"" << roomIrId << "\",\n"
+        // Legacy field for older presets/tools.
         << "  \"roomAmount\": " << config.roomAmount << ",\n"
         << "  \"pickPosition\": " << config.pickPosition << ",\n"
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
-        << "  \"noiseType\": \"" << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white")
-        << "\",\n"
+        << "  \"noiseType\": \""
+        << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white") << "\",\n"
         << "  \"excitationMode\": \""
-        << (config.excitationMode == synthesis::ExcitationMode::FixedNoisePick ? "fixed"
-                                                                                : "random")
+        << (config.excitationMode == synthesis::ExcitationMode::FixedNoisePick ? "fixed" : "random")
         << "\",\n"
         << "  \"seed\": " << config.seed << ",\n"
         << "  \"masterGain\": " << masterGain << ",\n"

@@ -24,7 +24,7 @@ void DrawTitle(ID2D1HwndRenderTarget* target,
     if (!target || !textFormat || !title) {
         return;
     }
-    const float padding = 8.0f;
+    const float padding = 4.0f;
     const auto titleRect =
         D2D1::RectF(rect.left + padding, rect.top + padding,
                     rect.right - padding, rect.top + padding + 20.0f);
@@ -84,16 +84,7 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
         resources.target->FillRectangle(bounds_, panelBrush);
     }
 
-    // Soft highlight overlay to make the active module feel "connected" to its knobs.
-    if (highlighted_ && resources.accentBrush) {
-        const float original = resources.accentBrush->GetOpacity();
-        resources.accentBrush->SetOpacity(0.10f);
-        resources.target->FillRectangle(bounds_, resources.accentBrush);
-        resources.accentBrush->SetOpacity(original);
-        resources.target->DrawRectangle(bounds_, resources.accentBrush, 1.8f);
-    }
-
-    const float padding = 10.0f;
+    const float padding = 6.0f;
     const auto inner =
         D2D1::RectF(bounds_.left + padding, bounds_.top + padding,
                     bounds_.right - padding, bounds_.bottom - padding);
@@ -105,7 +96,7 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
     }
 
     // Top visualization region (leave room for title).
-    const float titleHeight = 28.0f;
+    const float titleHeight = 26.0f;
     const float vizTop = inner.top + titleHeight;
     const float vizHeight = std::max(0.0f, innerHeight - titleHeight);
     const auto vizRect =
@@ -164,10 +155,25 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
                                 sink->EndFigure(D2D1_FIGURE_END_CLOSED);
                                 (void)sink->Close();
 
-                                const float originalOpacity = scopeBrush->GetOpacity();
-                                scopeBrush->SetOpacity(highlighted_ ? 0.20f : 0.12f);
-                                resources.target->FillGeometry(geometry.Get(), scopeBrush);
-                                scopeBrush->SetOpacity(originalOpacity);
+                                // Gradient fill under the curve (adds depth without looking like a debug scope).
+                                if (resources.accentFillBrush) {
+                                    const float originalOpacity =
+                                        resources.accentFillBrush->GetOpacity();
+                                    resources.accentFillBrush->SetStartPoint(
+                                        D2D1::Point2F(0.0f, vizRect.top));
+                                    resources.accentFillBrush->SetEndPoint(
+                                        D2D1::Point2F(0.0f, vizRect.bottom));
+                                    resources.accentFillBrush->SetOpacity(
+                                        highlighted_ ? 1.0f : 0.75f);
+                                    resources.target->FillGeometry(geometry.Get(),
+                                                                   resources.accentFillBrush);
+                                    resources.accentFillBrush->SetOpacity(originalOpacity);
+                                } else {
+                                    const float originalOpacity = scopeBrush->GetOpacity();
+                                    scopeBrush->SetOpacity(highlighted_ ? 0.20f : 0.12f);
+                                    resources.target->FillGeometry(geometry.Get(), scopeBrush);
+                                    scopeBrush->SetOpacity(originalOpacity);
+                                }
                             }
                         }
                     }
@@ -219,26 +225,49 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
                       resources.accentBrush, resources.textFormat, bounds_,
                       L"STRING", highlighted_);
             if (resources.accentBrush) {
-                // Three vertical bars: Decay / Brightness / Dispersion
+                // Thin-line spectrum style (instrument-like, not chunky debug bars).
                 const float w = vizRect.right - vizRect.left;
                 const float h = vizRect.bottom - vizRect.top;
-                const float gap = 8.0f;
-                const float barW = (w - 2.0f * gap) / 3.0f;
-                auto drawBar = [&](int idx, float value01) {
-                    value01 = std::clamp(value01, 0.0f, 1.0f);
-                    const float x0 = vizRect.left + idx * (barW + gap);
-                    const float y1 = vizRect.bottom;
-                    const float y0 = y1 - h * (0.15f + 0.8f * value01);
-                    resources.target->FillRectangle(
-                        D2D1::RectF(x0, y0, x0 + barW, y1),
-                        resources.accentBrush);
-                };
-                // Map decay [0.90,0.999] to 0..1 for visualization.
-                const float decay01 =
-                    (std::clamp(state_.decay, 0.90f, 0.999f) - 0.90f) / (0.999f - 0.90f);
-                drawBar(0, decay01);
-                drawBar(1, state_.brightness);
-                drawBar(2, state_.dispersionAmount);
+                if (w > 0.0f && h > 0.0f) {
+                    const int lineCount = 36;
+                    const float step = w / static_cast<float>(std::max(1, lineCount - 1));
+
+                    const float decay01 =
+                        (std::clamp(state_.decay, 0.90f, 0.999f) - 0.90f) / (0.999f - 0.90f);
+                    const float brightness = std::clamp(state_.brightness, 0.0f, 1.0f);
+                    const float dispersion = std::clamp(state_.dispersionAmount, 0.0f, 1.0f);
+
+                    const float originalOpacity = resources.accentBrush->GetOpacity();
+                    resources.accentBrush->SetOpacity(highlighted_ ? 0.90f : 0.70f);
+
+                    for (int i = 0; i < lineCount; ++i) {
+                        const float t =
+                            static_cast<float>(i) / static_cast<float>(std::max(1, lineCount - 1));
+                        const float harmonic = static_cast<float>(i) + 1.0f;
+
+                        // Simple, deterministic "harmonic" envelope controlled by key string params.
+                        const float rolloff =
+                            0.06f + (1.0f - brightness) * 0.08f;
+                        float amp = std::exp(-harmonic * rolloff);
+                        amp *= 0.45f + 0.55f * decay01;
+                        amp *= 0.35f + 0.65f * brightness;
+
+                        // Dispersion introduces mild comb-like ripples.
+                        const float ripple =
+                            1.0f - 0.25f * dispersion +
+                            0.25f * std::sin((t * 18.0f + dispersion * 2.0f) * 6.2831853f) * dispersion;
+                        amp *= std::clamp(ripple, 0.2f, 1.2f);
+                        amp = std::clamp(amp, 0.0f, 1.0f);
+
+                        const float lineH = h * (0.10f + 0.85f * amp);
+                        const float x = vizRect.left + step * static_cast<float>(i);
+                        resources.target->DrawLine(D2D1::Point2F(x, vizRect.bottom),
+                                                   D2D1::Point2F(x, vizRect.bottom - lineH),
+                                                   resources.accentBrush, 1.0f);
+                    }
+
+                    resources.accentBrush->SetOpacity(originalOpacity);
+                }
             }
             break;
         }
@@ -247,16 +276,74 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
                       resources.accentBrush, resources.textFormat, bounds_,
                       L"BODY", highlighted_);
             if (resources.accentBrush) {
-                // Simple tone meter.
+                // Bell-curve-like response curve (Tone shifts, Size changes width).
                 const float w = vizRect.right - vizRect.left;
                 const float h = vizRect.bottom - vizRect.top;
-                const float v = std::clamp(state_.bodyTone, 0.0f, 1.0f);
-                const float barH = h * (0.2f + 0.7f * v);
-                const float x0 = vizRect.left + w * 0.25f;
-                const float x1 = vizRect.right - w * 0.25f;
-                resources.target->FillRectangle(
-                    D2D1::RectF(x0, vizRect.bottom - barH, x1, vizRect.bottom),
-                    resources.accentBrush);
+                if (w > 0.0f && h > 0.0f) {
+                    const float tone = std::clamp(state_.bodyTone, 0.0f, 1.0f);
+                    const float size = std::clamp(state_.bodySize, 0.0f, 1.0f);
+
+                    const float centerX = vizRect.left + w * (0.20f + 0.60f * tone);
+                    const float sigma = w * (0.06f + 0.22f * size);
+                    const float invSigma = sigma > 1e-4f ? (1.0f / sigma) : 1.0f;
+
+                    constexpr int kPointCount = 80;
+                    const float step = w / static_cast<float>(kPointCount - 1);
+
+                    std::vector<D2D1_POINT_2F> points;
+                    points.reserve(kPointCount);
+                    for (int i = 0; i < kPointCount; ++i) {
+                        const float x = vizRect.left + step * static_cast<float>(i);
+                        const float dx = (x - centerX) * invSigma;
+                        const float y01 = std::exp(-0.5f * dx * dx);  // 0..1
+                        const float y = vizRect.bottom - h * (0.10f + 0.82f * y01);
+                        points.push_back(D2D1::Point2F(x, y));
+                    }
+
+                    // Filled under-curve gradient (adds depth).
+                    if (resources.accentFillBrush) {
+                        Microsoft::WRL::ComPtr<ID2D1Factory> factory;
+                        resources.target->GetFactory(&factory);
+                        if (factory) {
+                            Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;
+                            if (SUCCEEDED(factory->CreatePathGeometry(&geometry)) && geometry) {
+                                Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+                                if (SUCCEEDED(geometry->Open(&sink)) && sink) {
+                                    sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+                                    sink->BeginFigure(D2D1::Point2F(points.front().x, vizRect.bottom),
+                                                      D2D1_FIGURE_BEGIN_FILLED);
+                                    for (const auto& p : points) {
+                                        sink->AddLine(p);
+                                    }
+                                    sink->AddLine(D2D1::Point2F(points.back().x, vizRect.bottom));
+                                    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                                    (void)sink->Close();
+
+                                    const float originalOpacity =
+                                        resources.accentFillBrush->GetOpacity();
+                                    resources.accentFillBrush->SetStartPoint(
+                                        D2D1::Point2F(0.0f, vizRect.top));
+                                    resources.accentFillBrush->SetEndPoint(
+                                        D2D1::Point2F(0.0f, vizRect.bottom));
+                                    resources.accentFillBrush->SetOpacity(highlighted_ ? 1.0f : 0.75f);
+                                    resources.target->FillGeometry(geometry.Get(),
+                                                                   resources.accentFillBrush);
+                                    resources.accentFillBrush->SetOpacity(originalOpacity);
+                                }
+                            }
+                        }
+                    }
+
+                    // Curve stroke.
+                    const float originalOpacity = resources.accentBrush->GetOpacity();
+                    resources.accentBrush->SetOpacity(highlighted_ ? 1.0f : 0.90f);
+                    const float thickness = highlighted_ ? 1.8f : 1.5f;
+                    for (std::size_t i = 1; i < points.size(); ++i) {
+                        resources.target->DrawLine(points[i - 1], points[i],
+                                                   resources.accentBrush, thickness);
+                    }
+                    resources.accentBrush->SetOpacity(originalOpacity);
+                }
             }
             break;
         }
@@ -318,7 +405,7 @@ bool ModulePreviewNode::onPointerDown(float x, float y) {
 }
 
 D2D1_RECT_F ModulePreviewNode::computeVizRect() const {
-    const float padding = 10.0f;
+    const float padding = 6.0f;
     const auto inner =
         D2D1::RectF(bounds_.left + padding, bounds_.top + padding,
                     bounds_.right - padding, bounds_.bottom - padding);
@@ -327,7 +414,7 @@ D2D1_RECT_F ModulePreviewNode::computeVizRect() const {
     if (innerWidth <= 0.0f || innerHeight <= 0.0f) {
         return D2D1::RectF(0, 0, 0, 0);
     }
-    const float titleHeight = 28.0f;
+    const float titleHeight = 26.0f;
     const float vizTop = inner.top + titleHeight;
     const float vizHeight = std::max(0.0f, innerHeight - titleHeight);
     return D2D1::RectF(inner.left, vizTop, inner.right, vizTop + vizHeight);

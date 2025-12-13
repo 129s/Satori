@@ -47,7 +47,10 @@ struct FlowDiagramState {
     float dispersionAmount = 0.0f;
     float pickPosition = 0.0f;
     float bodyTone = 0.0f;
+    float bodySize = 0.0f;
     float roomAmount = 0.0f;
+    int roomIrIndex = 0;
+    std::vector<float> roomIrPreviewSamples;
     int noiseType = 0;  // 0 = White, 1 = Binary（或项目内部约定）
     std::vector<float> excitationSamples;  // 激励瞬态/包络预览（用于 Excitation Scope）
     FlowModule highlightedModule = FlowModule::kNone;

@@ -6,6 +6,9 @@
 #include <limits>
 
 #include "dsp/Filter.h"
+#include "dsp/ConvolutionReverb.h"
+#include "dsp/PartitionedConvolver.h"
+#include "dsp/RoomIrLibrary.h"
 
 namespace engine {
 
@@ -93,70 +96,85 @@ public:
             return;
         }
         sampleRate_ = sampleRate;
-        refreshDelay();
+        rebuildKernels();
+        reverb_.setSampleRate(sampleRate_);
+        reverb_.setIrKernels(kernels_);
     }
 
-    void setAmount(float amount) {
-        amount_ = std::clamp(amount, 0.0f, 1.0f);
-        refreshGains();
+    void setMix(float mix) {
+        mix_ = std::clamp(mix, 0.0f, 1.0f);
+        reverb_.setMix(mix_);
     }
 
-    void reset() {
-        std::fill(delayBuffer_.begin(), delayBuffer_.end(), 0.0f);
-        writeIndex_ = 0;
-        lpState_ = 0.0f;
+    void setIrIndex(int index) {
+        irIndex_ = std::max(0, index);
+        reverb_.setIrIndex(irIndex_);
     }
+
+    void reset() { reverb_.reset(); }
 
     void process(float input, float& outL, float& outR) {
-        if (delayBuffer_.empty() || amount_ <= 0.0001f) {
-            outL = outR = input;
-            return;
-        }
-        delayBuffer_[writeIndex_] = input;
-        const std::size_t size = delayBuffer_.size();
-        const float tapShort =
-            delayBuffer_[(writeIndex_ + size - shortDelay_) % size];
-        const float tapLong =
-            delayBuffer_[(writeIndex_ + size - longDelay_) % size];
-        writeIndex_ = (writeIndex_ + 1) % size;
-
-        lpState_ = dampCoeff_ * tapLong + (1.0f - dampCoeff_) * lpState_;
-        const float wetL = 0.6f * tapShort + 0.4f * lpState_;
-        const float wetR = 0.4f * tapShort + 0.6f * lpState_;
-
-        outL = dryGain_ * input + wetGain_ * wetL;
-        outR = dryGain_ * input + wetGain_ * wetR;
+        reverb_.processSample(input, outL, outR);
     }
 
 private:
-    void refreshDelay() {
-        const std::size_t maxDelay = static_cast<std::size_t>(
-            std::max(8.0, std::ceil(sampleRate_ * 0.003)));
-        delayBuffer_.assign(maxDelay, 0.0f);
-        shortDelay_ = static_cast<std::size_t>(
-            std::max(1.0, std::round(sampleRate_ * 0.0012)));
-        longDelay_ = static_cast<std::size_t>(
-            std::max(1.0, std::round(sampleRate_ * 0.0019)));
-        writeIndex_ = 0;
-        lpState_ = 0.0f;
+    static std::vector<float> ResampleLinear(const float* src,
+                                             std::size_t srcCount,
+                                             int srcRate,
+                                             int dstRate) {
+        if (!src || srcCount == 0 || srcRate <= 0 || dstRate <= 0) {
+            return {};
+        }
+        if (srcRate == dstRate) {
+            return std::vector<float>(src, src + srcCount);
+        }
+        const double ratio = static_cast<double>(dstRate) / static_cast<double>(srcRate);
+        const std::size_t dstCount =
+            std::max<std::size_t>(1, static_cast<std::size_t>(std::llround(srcCount * ratio)));
+        std::vector<float> dst(dstCount, 0.0f);
+        for (std::size_t i = 0; i < dstCount; ++i) {
+            const double srcPos = static_cast<double>(i) / ratio;
+            const std::size_t idx = static_cast<std::size_t>(std::floor(srcPos));
+            const std::size_t idx1 = std::min(srcCount - 1, idx + 1);
+            const float t = static_cast<float>(srcPos - static_cast<double>(idx));
+            const float a = src[std::min(idx, srcCount - 1)];
+            const float b = src[idx1];
+            dst[i] = a + (b - a) * t;
+        }
+        return dst;
     }
 
-    void refreshGains() {
-        wetGain_ = 0.3f + 0.7f * amount_;
-        dryGain_ = 1.0f - 0.5f * amount_;
-        dampCoeff_ = 0.25f + 0.35f * amount_;
+    void rebuildKernels() {
+        kernels_.clear();
+        const auto& list = dsp::RoomIrLibrary::list();
+        kernels_.reserve(list.size());
+
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            std::size_t count = 0;
+            int irSr = 0;
+            const float* ir = dsp::RoomIrLibrary::samplesMono(static_cast<int>(i), &count, &irSr);
+            std::vector<float> resampled = ResampleLinear(ir, count, irSr,
+                                                         static_cast<int>(std::lround(sampleRate_)));
+            // Safety: keep IR length bounded for CPU predictability (truncate tail).
+            const std::size_t maxLen = static_cast<std::size_t>(std::lround(sampleRate_ * 2.0)); // 2s
+            if (resampled.size() > maxLen) {
+                resampled.resize(maxLen);
+            }
+            kernels_.push_back(dsp::PartitionedConvolver::buildKernelFromIr(
+                resampled, reverbBlockSize_, reverbFftSize_));
+        }
     }
 
-    std::vector<float> delayBuffer_;
-    std::size_t writeIndex_ = 0;
-    std::size_t shortDelay_ = 1;
-    std::size_t longDelay_ = 2;
     double sampleRate_ = 44100.0;
-    float amount_ = 0.0f;
-    float wetGain_ = 0.3f;
-    float dryGain_ = 1.0f;
-    float dampCoeff_ = 0.4f;
-    float lpState_ = 0.0f;
+    float mix_ = 0.0f;
+    int irIndex_ = 0;
+
+    // Keep consistent with dsp::ConvolutionReverb defaults.
+    std::size_t reverbBlockSize_ = 256;
+    std::size_t reverbFftSize_ = 512;
+
+    std::vector<dsp::ConvolutionKernel> kernels_;
+    dsp::ConvolutionReverb reverb_;
 };
 
 namespace {
@@ -459,7 +477,8 @@ StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
     bodyFilter_->setParams(config_.bodyTone, config_.bodySize);
     roomProcessor_ = std::make_unique<RoomProcessor>();
     roomProcessor_->setSampleRate(config_.sampleRate);
-    roomProcessor_->setAmount(config_.roomAmount);
+    roomProcessor_->setMix(config_.roomAmount);
+    roomProcessor_->setIrIndex(config_.roomIrIndex);
 }
 
 StringSynthEngine::~StringSynthEngine() = default;
@@ -483,6 +502,8 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::BodyTone, config.bodyTone, config_, masterGain_);
     applyParamUnlocked(ParamId::BodySize, config.bodySize, config_, masterGain_);
     applyParamUnlocked(ParamId::RoomAmount, config.roomAmount, config_, masterGain_);
+    applyParamUnlocked(ParamId::RoomIR, static_cast<float>(config.roomIrIndex), config_,
+                       masterGain_);
     applyParamUnlocked(ParamId::PickPosition, config.pickPosition, config_, masterGain_);
     applyParamUnlocked(ParamId::EnableLowpass, config.enableLowpass ? 1.0f : 0.0f,
                        config_, masterGain_);
@@ -495,6 +516,8 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     }
     if (roomProcessor_) {
         roomProcessor_->setSampleRate(config_.sampleRate);
+        roomProcessor_->setIrIndex(config_.roomIrIndex);
+        roomProcessor_->setMix(config_.roomAmount);
     }
 }
 
@@ -605,6 +628,8 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.bodySize;
         case ParamId::RoomAmount:
             return config_.roomAmount;
+        case ParamId::RoomIR:
+            return static_cast<float>(config_.roomIrIndex);
         case ParamId::PickPosition:
             return config_.pickPosition;
         case ParamId::EnableLowpass:
@@ -802,7 +827,13 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
         case ParamId::RoomAmount:
             config.roomAmount = clamped;
             if (roomProcessor_) {
-                roomProcessor_->setAmount(config.roomAmount);
+                roomProcessor_->setMix(config.roomAmount);
+            }
+            break;
+        case ParamId::RoomIR:
+            config.roomIrIndex = static_cast<int>(std::lround(clamped));
+            if (roomProcessor_) {
+                roomProcessor_->setIrIndex(config.roomIrIndex);
             }
             break;
         case ParamId::PickPosition:

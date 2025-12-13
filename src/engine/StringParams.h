@@ -15,6 +15,7 @@ enum class ParamId {
     BodyTone,
     BodySize,
     RoomAmount,
+    RoomIR,
     PickPosition,
     EnableLowpass,
     NoiseType,

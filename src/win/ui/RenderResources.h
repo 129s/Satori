@@ -12,10 +12,13 @@ struct RenderResources {
     ID2D1HwndRenderTarget* target = nullptr;
     ID2D1SolidColorBrush* accentBrush = nullptr;
     ID2D1SolidColorBrush* excitationBrush = nullptr;
+    ID2D1LinearGradientBrush* accentFillBrush = nullptr;  // Optional (module visualizers)
     ID2D1SolidColorBrush* textBrush = nullptr;
     ID2D1SolidColorBrush* trackBrush = nullptr;
     ID2D1SolidColorBrush* fillBrush = nullptr;
     ID2D1SolidColorBrush* panelBrush = nullptr;
+    ID2D1SolidColorBrush* cardBrush = nullptr;   // Module card background
+    ID2D1SolidColorBrush* shadowBrush = nullptr; // Subtle drop shadows for cards
     ID2D1SolidColorBrush* gridBrush = nullptr;
     IDWriteTextFormat* textFormat = nullptr;
 
