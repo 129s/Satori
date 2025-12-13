@@ -63,8 +63,10 @@ TEST_CASE("ConvolutionReverb mix=0 passes dry", "[dsp][reverb]") {
     std::vector<float> ir(block * 2, 0.0f);
     ir[0] = 1.0f;
 
-    std::vector<dsp::ConvolutionKernel> kernels;
-    kernels.push_back(dsp::PartitionedConvolver::buildKernelFromIr(ir, block, fftSize));
+    std::vector<dsp::StereoConvolutionKernel> kernels;
+    dsp::StereoConvolutionKernel kernel;
+    kernel.left = dsp::PartitionedConvolver::buildKernelFromIr(ir, block, fftSize);
+    kernels.push_back(std::move(kernel));
 
     dsp::ConvolutionReverb reverb;
     reverb.setIrKernels(std::move(kernels));
@@ -76,5 +78,41 @@ TEST_CASE("ConvolutionReverb mix=0 passes dry", "[dsp][reverb]") {
         reverb.processSample(in, outL, outR);
         REQUIRE(outL == Catch::Approx(in).epsilon(1e-6));
         REQUIRE(outR == Catch::Approx(in).epsilon(1e-6));
+    }
+}
+
+TEST_CASE("ConvolutionReverb stereo IR produces stereo wet", "[dsp][reverb]") {
+    const std::size_t block = 256;   // match dsp::ConvolutionReverb defaults
+    const std::size_t fftSize = 512; // match dsp::ConvolutionReverb defaults
+
+    std::vector<float> irL(block * 2, 0.0f);
+    std::vector<float> irR(block * 2, 0.0f);
+    irL[0] = 1.0f;
+    irR[0] = 0.5f;
+
+    dsp::StereoConvolutionKernel kernel;
+    kernel.left = dsp::PartitionedConvolver::buildKernelFromIr(irL, block, fftSize);
+    kernel.right = dsp::PartitionedConvolver::buildKernelFromIr(irR, block, fftSize);
+    kernel.isStereo = true;
+
+    std::vector<dsp::StereoConvolutionKernel> kernels;
+    kernels.push_back(std::move(kernel));
+
+    dsp::ConvolutionReverb reverb;
+    reverb.setIrKernels(std::move(kernels));
+    reverb.setMix(1.0f);
+
+    float outL = 0.0f, outR = 0.0f;
+    for (int i = 0; i < static_cast<int>(block * 2); ++i) {
+        const float in = (i == 0) ? 1.0f : 0.0f;
+        reverb.processSample(in, outL, outR);
+        if (i < static_cast<int>(block)) {
+            REQUIRE(outL == Catch::Approx(0.0f).margin(1e-6));
+            REQUIRE(outR == Catch::Approx(0.0f).margin(1e-6));
+        }
+        if (i == static_cast<int>(block)) {
+            REQUIRE(outL == Catch::Approx(0.25f).margin(1e-4));
+            REQUIRE(outR == Catch::Approx(0.125f).margin(1e-4));
+        }
     }
 }

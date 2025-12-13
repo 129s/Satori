@@ -38,9 +38,12 @@ target_include_directories(SatoriCoreLib PUBLIC src)
 
 # Build-time embedding of IR WAVs into compiled C++ arrays (no runtime file IO).
 set(SATORI_IR_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/ir_src")
-file(GLOB SATORI_IR_WAVS CONFIGURE_DEPENDS "${SATORI_IR_SRC_DIR}/*.wav")
-if (NOT SATORI_IR_WAVS)
-    message(FATAL_ERROR "Missing room IR WAVs: ${SATORI_IR_SRC_DIR}/*.wav")
+file(GLOB SATORI_IR_INPUTS CONFIGURE_DEPENDS
+    "${SATORI_IR_SRC_DIR}/*.wav"
+    "${SATORI_IR_SRC_DIR}/*.wv"
+)
+if (NOT SATORI_IR_INPUTS)
+    message(FATAL_ERROR "Missing room IR audio files: ${SATORI_IR_SRC_DIR}/*.wav or *.wv")
 endif()
 set(SATORI_IR_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/room_ir")
 set(SATORI_IR_DATA_H "${SATORI_IR_GEN_DIR}/RoomIrData.h")
@@ -54,7 +57,7 @@ add_custom_command(
             --out_h "${SATORI_IR_DATA_H}"
             --out_cpp "${SATORI_IR_DATA_CPP}"
             --preview 512
-    DEPENDS ${SATORI_IR_WAVS}
+    DEPENDS ${SATORI_IR_INPUTS}
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_room_ir_data.py"
     VERBATIM
 )

@@ -28,7 +28,7 @@ void ConvolutionReverb::setSampleRate(double sampleRate) {
 
 void ConvolutionReverb::setMix(float mix01) { targetMix_ = Clamp01(mix01); }
 
-void ConvolutionReverb::setIrKernels(std::vector<ConvolutionKernel> kernels) {
+void ConvolutionReverb::setIrKernels(std::vector<StereoConvolutionKernel> kernels) {
     kernels_ = std::move(kernels);
     if (kernels_.empty()) {
         irIndex_ = 0;
@@ -53,14 +53,17 @@ void ConvolutionReverb::setIrIndex(int index) {
     }
     pendingIrIndex_ = index;
     fadeSamplePos_ = 0;
-    std::fill(overlapB_.begin(), overlapB_.end(), 0.0f);
+    std::fill(overlapBL_.begin(), overlapBL_.end(), 0.0f);
+    std::fill(overlapBR_.begin(), overlapBR_.end(), 0.0f);
 }
 
 void ConvolutionReverb::reset() {
     convolver_.reset();
     std::fill(inBlock_.begin(), inBlock_.end(), 0.0f);
-    std::fill(wetBlockA_.begin(), wetBlockA_.end(), 0.0f);
-    std::fill(wetBlockB_.begin(), wetBlockB_.end(), 0.0f);
+    std::fill(wetBlockAL_.begin(), wetBlockAL_.end(), 0.0f);
+    std::fill(wetBlockAR_.begin(), wetBlockAR_.end(), 0.0f);
+    std::fill(wetBlockBL_.begin(), wetBlockBL_.end(), 0.0f);
+    std::fill(wetBlockBR_.begin(), wetBlockBR_.end(), 0.0f);
     inPos_ = 0;
     outPos_ = 0;
     wetReady_ = false;
@@ -68,8 +71,10 @@ void ConvolutionReverb::reset() {
     fadeSamplePos_ = 0;
 
     currentMix_ = targetMix_;
-    std::fill(overlapA_.begin(), overlapA_.end(), 0.0f);
-    std::fill(overlapB_.begin(), overlapB_.end(), 0.0f);
+    std::fill(overlapAL_.begin(), overlapAL_.end(), 0.0f);
+    std::fill(overlapAR_.begin(), overlapAR_.end(), 0.0f);
+    std::fill(overlapBL_.begin(), overlapBL_.end(), 0.0f);
+    std::fill(overlapBR_.begin(), overlapBR_.end(), 0.0f);
 
     stereoDelay_.fill(0.0f);
     stereoPos_ = 0;
@@ -80,24 +85,37 @@ void ConvolutionReverb::processSample(float input, float& outL, float& outR) {
     const float dry = input;
     currentMix_ += (targetMix_ - currentMix_) * mixSmoothingAlpha_;
 
-    float wetMono = 0.0f;
+    float wetLBase = 0.0f;
+    float wetRBase = 0.0f;
     if (wetReady_ && outPos_ < blockSize_) {
-        wetMono = wetBlockA_[outPos_];
+        wetLBase = wetBlockAL_[outPos_];
+        wetRBase = wetBlockAR_[outPos_];
     }
-    wetMono *= wetLevel_;
+    wetLBase *= wetLevel_;
+    wetRBase *= wetLevel_;
 
-    // Stereo decorrelation: short wet-only delay taps + a bit of damping.
-    stereoDelay_[stereoPos_] = wetMono;
-    const std::size_t size = stereoDelay_.size();
-    const auto tap = [&](std::size_t delaySamples) -> float {
-        return stereoDelay_[(stereoPos_ + size - (delaySamples % size)) % size];
-    };
-    const float tapShort = tap(7);
-    const float tapLong = tap(19);
-    stereoLp_ = 0.25f * tapLong + 0.75f * stereoLp_;
-    const float wetL = wetMono;
-    const float wetR = 0.6f * tapShort + 0.4f * stereoLp_;
-    stereoPos_ = (stereoPos_ + 1) % size;
+    float wetL = wetLBase;
+    float wetR = wetRBase;
+    const bool useDecorrelation =
+        (!kernels_.empty() && pendingIrIndex_ < 0 && !kernels_[static_cast<std::size_t>(irIndex_)].isStereo);
+    {
+        // Keep decorrelator state in sync even when bypassed (prevents jumps when
+        // switching between mono and stereo IRs).
+        const float wetMono = 0.5f * (wetLBase + wetRBase);
+        stereoDelay_[stereoPos_] = wetMono;
+        const std::size_t size = stereoDelay_.size();
+        const auto tap = [&](std::size_t delaySamples) -> float {
+            return stereoDelay_[(stereoPos_ + size - (delaySamples % size)) % size];
+        };
+        const float tapShort = tap(7);
+        const float tapLong = tap(19);
+        stereoLp_ = 0.25f * tapLong + 0.75f * stereoLp_;
+        if (useDecorrelation) {
+            wetL = wetMono;
+            wetR = 0.6f * tapShort + 0.4f * stereoLp_;
+        }
+        stereoPos_ = (stereoPos_ + 1) % size;
+    }
 
     outL = dry * (1.0f - currentMix_) + wetL * currentMix_;
     outR = dry * (1.0f - currentMix_) + wetR * currentMix_;
@@ -119,18 +137,21 @@ void ConvolutionReverb::processSample(float input, float& outL, float& outR) {
 
 void ConvolutionReverb::rebuildForCurrentKernels() {
     inBlock_.assign(blockSize_, 0.0f);
-    wetBlockA_.assign(blockSize_, 0.0f);
-    wetBlockB_.assign(blockSize_, 0.0f);
-    overlapA_.assign(blockSize_, 0.0f);
-    overlapB_.assign(blockSize_, 0.0f);
-    convolver_.configure(blockSize_, fftSize_,
-                         /*maxPartitions=*/kernels_.empty()
-                              ? 1
-                              : kernels_[0].partitions.size());
+    wetBlockAL_.assign(blockSize_, 0.0f);
+    wetBlockAR_.assign(blockSize_, 0.0f);
+    wetBlockBL_.assign(blockSize_, 0.0f);
+    wetBlockBR_.assign(blockSize_, 0.0f);
+    overlapAL_.assign(blockSize_, 0.0f);
+    overlapAR_.assign(blockSize_, 0.0f);
+    overlapBL_.assign(blockSize_, 0.0f);
+    overlapBR_.assign(blockSize_, 0.0f);
     // Max partitions may vary per IR; pick the maximum.
     std::size_t maxParts = 1;
     for (const auto& k : kernels_) {
-        maxParts = std::max(maxParts, k.partitions.size());
+        maxParts = std::max(maxParts, k.left.partitions.size());
+        if (k.isStereo) {
+            maxParts = std::max(maxParts, k.right.partitions.size());
+        }
     }
     convolver_.configure(blockSize_, fftSize_, maxParts);
     reset();
@@ -140,19 +161,30 @@ void ConvolutionReverb::processBlock() {
     convolver_.pushInputBlock(inBlock_.data());
 
     if (kernels_.empty()) {
-        std::fill(wetBlockA_.begin(), wetBlockA_.end(), 0.0f);
+        std::fill(wetBlockAL_.begin(), wetBlockAL_.end(), 0.0f);
+        std::fill(wetBlockAR_.begin(), wetBlockAR_.end(), 0.0f);
         return;
     }
 
     const auto& a = kernels_[static_cast<std::size_t>(irIndex_)];
-    convolver_.convolveWithOverlap(a, wetBlockA_.data(), overlapA_);
+    convolver_.convolveWithOverlap(a.left, wetBlockAL_.data(), overlapAL_);
+    if (a.isStereo) {
+        convolver_.convolveWithOverlap(a.right, wetBlockAR_.data(), overlapAR_);
+    } else {
+        std::copy(wetBlockAL_.begin(), wetBlockAL_.end(), wetBlockAR_.begin());
+    }
 
     if (pendingIrIndex_ < 0) {
         return;
     }
 
     const auto& b = kernels_[static_cast<std::size_t>(pendingIrIndex_)];
-    convolver_.convolveWithOverlap(b, wetBlockB_.data(), overlapB_);
+    convolver_.convolveWithOverlap(b.left, wetBlockBL_.data(), overlapBL_);
+    if (b.isStereo) {
+        convolver_.convolveWithOverlap(b.right, wetBlockBR_.data(), overlapBR_);
+    } else {
+        std::copy(wetBlockBL_.begin(), wetBlockBL_.end(), wetBlockBR_.begin());
+    }
 
     const std::size_t totalSamples =
         std::max<std::size_t>(1, static_cast<std::size_t>(fadeTotalBlocks_) * blockSize_);
@@ -160,7 +192,8 @@ void ConvolutionReverb::processBlock() {
     for (std::size_t i = 0; i < blockSize_; ++i) {
         const float t =
             Clamp01(static_cast<float>(base + i) / static_cast<float>(totalSamples));
-        wetBlockA_[i] = wetBlockA_[i] * (1.0f - t) + wetBlockB_[i] * t;
+        wetBlockAL_[i] = wetBlockAL_[i] * (1.0f - t) + wetBlockBL_[i] * t;
+        wetBlockAR_[i] = wetBlockAR_[i] * (1.0f - t) + wetBlockBR_[i] * t;
     }
 
     fadeSamplePos_ += blockSize_;
@@ -168,8 +201,10 @@ void ConvolutionReverb::processBlock() {
         irIndex_ = pendingIrIndex_;
         pendingIrIndex_ = -1;
         fadeSamplePos_ = 0;
-        overlapA_.swap(overlapB_);
-        std::fill(overlapB_.begin(), overlapB_.end(), 0.0f);
+        overlapAL_.swap(overlapBL_);
+        overlapAR_.swap(overlapBR_);
+        std::fill(overlapBL_.begin(), overlapBL_.end(), 0.0f);
+        std::fill(overlapBR_.begin(), overlapBR_.end(), 0.0f);
     }
 }
 

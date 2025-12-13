@@ -153,18 +153,33 @@ private:
         kernels_.reserve(list.size());
 
         for (std::size_t i = 0; i < list.size(); ++i) {
-            std::size_t count = 0;
-            int irSr = 0;
-            const float* ir = dsp::RoomIrLibrary::samplesMono(static_cast<int>(i), &count, &irSr);
-            std::vector<float> resampled = ResampleLinear(ir, count, irSr,
-                                                         static_cast<int>(std::lround(sampleRate_)));
+            const auto ir = dsp::RoomIrLibrary::samples(static_cast<int>(i));
+            const bool stereo = (ir.channels == 2 && ir.right);
+            std::vector<float> resampledL = ResampleLinear(ir.left, ir.frameCount, ir.sampleRate,
+                                                          static_cast<int>(std::lround(sampleRate_)));
+            std::vector<float> resampledR;
+            if (stereo) {
+                resampledR = ResampleLinear(ir.right, ir.frameCount, ir.sampleRate,
+                                            static_cast<int>(std::lround(sampleRate_)));
+            }
             // Safety: keep IR length bounded for CPU predictability (truncate tail).
             const std::size_t maxLen = static_cast<std::size_t>(std::lround(sampleRate_ * 2.0)); // 2s
-            if (resampled.size() > maxLen) {
-                resampled.resize(maxLen);
+            if (resampledL.size() > maxLen) {
+                resampledL.resize(maxLen);
             }
-            kernels_.push_back(dsp::PartitionedConvolver::buildKernelFromIr(
-                resampled, reverbBlockSize_, reverbFftSize_));
+            if (stereo && resampledR.size() > maxLen) {
+                resampledR.resize(maxLen);
+            }
+
+            dsp::StereoConvolutionKernel kernel;
+            kernel.left = dsp::PartitionedConvolver::buildKernelFromIr(
+                resampledL, reverbBlockSize_, reverbFftSize_);
+            if (stereo) {
+                kernel.right = dsp::PartitionedConvolver::buildKernelFromIr(
+                    resampledR, reverbBlockSize_, reverbFftSize_);
+                kernel.isStereo = true;
+            }
+            kernels_.push_back(std::move(kernel));
         }
     }
 
@@ -176,7 +191,7 @@ private:
     std::size_t reverbBlockSize_ = 256;
     std::size_t reverbFftSize_ = 512;
 
-    std::vector<dsp::ConvolutionKernel> kernels_;
+    std::vector<dsp::StereoConvolutionKernel> kernels_;
     dsp::ConvolutionReverb reverb_;
 };
 

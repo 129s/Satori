@@ -32,6 +32,7 @@ const std::vector<RoomIrInfo>& RoomIrLibrary::list() {
             info.id = built.items[i].id;
             info.displayName = built.items[i].displayName;
             info.sampleRate = built.items[i].sampleRate;
+            info.channels = built.items[i].channels;
             out.push_back(info);
         }
         return out;
@@ -49,6 +50,21 @@ int RoomIrLibrary::findIndexById(std::string_view id) {
     return -1;
 }
 
+RoomIrLibrary::Samples RoomIrLibrary::samples(int index) {
+    const auto built = BuiltIns();
+    if (index < 0 || static_cast<std::size_t>(index) >= built.count) {
+        return {};
+    }
+    const auto& it = built.items[static_cast<std::size_t>(index)];
+    Samples out;
+    out.sampleRate = it.sampleRate;
+    out.channels = it.channels;
+    out.left = it.samplesL;
+    out.right = it.samplesR;
+    out.frameCount = it.frameCount;
+    return out;
+}
+
 const float* RoomIrLibrary::samplesMono(int index,
                                         std::size_t* outCount,
                                         int* outSampleRate) {
@@ -59,9 +75,9 @@ const float* RoomIrLibrary::samplesMono(int index,
         return nullptr;
     }
     const auto& it = built.items[static_cast<std::size_t>(index)];
-    if (outCount) *outCount = it.sampleCount;
+    if (outCount) *outCount = it.frameCount;
     if (outSampleRate) *outSampleRate = it.sampleRate;
-    return it.samples;
+    return it.samplesL;
 }
 
 std::vector<float> RoomIrLibrary::previewMono(int index, std::size_t maxSamples) {
@@ -76,26 +92,35 @@ std::vector<float> RoomIrLibrary::previewMono(int index, std::size_t maxSamples)
     const auto& it = built.items[static_cast<std::size_t>(index)];
     if (!it.preview || it.previewCount == 0) {
         // Fallback: downsample raw samples if preview wasn't generated.
-        std::size_t count = 0;
-        int sr = 0;
-        const float* s = samplesMono(index, &count, &sr);
-        (void)sr;
-        if (!s || count == 0) {
+        const auto s = samples(index);
+        if (!s.left || s.frameCount == 0) {
             return {};
         }
-        const std::size_t outCount = std::min(maxSamples, count);
+        const std::size_t outCount = std::min(maxSamples, s.frameCount);
         std::vector<float> out;
         out.reserve(outCount);
-        if (outCount == count) {
-            out.assign(s, s + count);
+        const bool stereo = (s.channels == 2 && s.right);
+        if (outCount == s.frameCount) {
+            if (!stereo) {
+                out.assign(s.left, s.left + s.frameCount);
+                return out;
+            }
+            for (std::size_t i = 0; i < s.frameCount; ++i) {
+                out.push_back(0.5f * (s.left[i] + s.right[i]));
+            }
             return out;
         }
-        const float step = static_cast<float>(count - 1) / static_cast<float>(outCount - 1);
+        const float step =
+            static_cast<float>(s.frameCount - 1) / static_cast<float>(outCount - 1);
         for (std::size_t i = 0; i < outCount; ++i) {
             const std::size_t idx =
-                std::min(count - 1,
+                std::min(s.frameCount - 1,
                          static_cast<std::size_t>(std::lround(step * static_cast<float>(i))));
-            out.push_back(s[idx]);
+            if (!stereo) {
+                out.push_back(s.left[idx]);
+            } else {
+                out.push_back(0.5f * (s.left[idx] + s.right[idx]));
+            }
         }
         return out;
     }
