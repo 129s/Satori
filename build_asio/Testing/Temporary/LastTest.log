@@ -1,0 +1,22 @@
+Start testing: Dec 13 21:39 China Standard Time
+----------------------------------------------------------
+1/1 Testing: SatoriUnitTests
+1/1 Test: SatoriUnitTests
+Command: "D:/CppProject/Satori/build_asio/SatoriUnitTests.exe"
+Directory: D:/CppProject/Satori/build_asio
+"SatoriUnitTests" start time: Dec 13 21:39 China Standard Time
+Output:
+----------------------------------------------------------
+Randomness seeded to: 2090873237
+===============================================================================
+All tests passed (670 assertions in 20 test cases)
+
+<end of output>
+Test time =   3.32 sec
+----------------------------------------------------------
+Test Passed.
+"SatoriUnitTests" end time: Dec 13 21:39 China Standard Time
+"SatoriUnitTests" time elapsed: 00:00:03
+----------------------------------------------------------
+
+End testing: Dec 13 21:39 China Standard Time

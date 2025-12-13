@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
@@ -13,16 +14,9 @@
 #include <mmdeviceapi.h>
 #include <wrl/client.h>
 
+#include "win/audio/AudioEngineTypes.h"
+
 namespace winaudio {
-
-/// Audio render callback. Caller fills stereo/mono float buffer.
-using RenderCallback = std::function<void(float* output, std::size_t frames)>;
-
-struct AudioEngineConfig {
-    uint32_t sampleRate = 44100;
-    uint16_t channels = 1;
-    uint32_t bufferFrames = 512;
-};
 
 class WASAPIAudioEngine {
 public:
@@ -30,6 +24,7 @@ public:
     ~WASAPIAudioEngine();
 
     bool initialize(RenderCallback callback);
+    bool reinitialize(AudioEngineConfig config, RenderCallback callback);
     void shutdown();
 
     bool start();
@@ -38,6 +33,8 @@ public:
     bool isRunning() const { return running_; }
     const AudioEngineConfig& config() const { return config_; }
     const std::string& lastError() const { return lastError_; }
+
+    static std::vector<AudioDeviceInfo> EnumerateOutputDevices();
 
 private:
     bool createDevice();

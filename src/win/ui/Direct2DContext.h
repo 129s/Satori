@@ -27,7 +27,7 @@ class UILayoutNode;
 class UIStackPanel;
 class UIHorizontalStack;
 class UIOverlay;
-class TopBarNode;
+class HeaderBarNode;
 class FlowDiagramNode;
 class KnobPanelNode;
 class ButtonBarNode;
@@ -123,7 +123,7 @@ private:
     bool pointerCaptured_ = false;
 #endif
     std::shared_ptr<UILayoutNode> rootLayout_;
-    std::shared_ptr<TopBarNode> topBarNode_;
+    std::shared_ptr<HeaderBarNode> headerBarNode_;
     std::shared_ptr<ButtonBarNode> buttonBarNode_;
     std::shared_ptr<UIHorizontalStack> mainRow_;
     std::shared_ptr<UILayoutNode> leftColumn_;

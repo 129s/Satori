@@ -14,9 +14,9 @@
 #include "dsp/RoomIrLibrary.h"
 #include "win/ui/nodes/FlowDiagramNode.h"
 #include "win/ui/nodes/ButtonBarNode.h"
+#include "win/ui/nodes/HeaderBarNode.h"
 #include "win/ui/nodes/KnobPanelNode.h"
 #include "win/ui/nodes/KeyboardNode.h"
-#include "win/ui/nodes/TopBarNode.h"
 #include "win/ui/nodes/WaveformNode.h"
 #include "win/ui/nodes/ModuleCardNode.h"
 #include "win/ui/nodes/ModulePreviewNode.h"
@@ -244,19 +244,23 @@ bool Direct2DContext::onPointerDown(float x, float y) {
     bool handled = false;
     // If a dropdown is open, route the click to its overlay first so it can
     // select/close without underlying knobs reacting.
-    if (roomIrSelectorNode_ && roomIrSelectorNode_->isOpen()) {
-        handled = roomIrSelectorNode_->onOverlayPointerDown(x, y);
-        if (handled) {
+    auto routeOverlayDown = [&](const std::shared_ptr<DropdownSelectorNode>& node) {
+        return node && node->isOpen() && node->onOverlayPointerDown(x, y);
+    };
+    if ((headerBarNode_ &&
+         (routeOverlayDown(headerBarNode_->deviceSelector()) ||
+          routeOverlayDown(headerBarNode_->sampleRateSelector()) ||
+          routeOverlayDown(headerBarNode_->bufferFramesSelector()))) ||
+        routeOverlayDown(roomIrSelectorNode_)) {
 #if SATORI_UI_DEBUG_ENABLED
-            const bool selectionChanged = updateDebugSelection(x, y);
-            pointerCaptured_ = true;
-            (void)selectionChanged;
-            return true;
+        const bool selectionChanged = updateDebugSelection(x, y);
+        pointerCaptured_ = true;
+        (void)selectionChanged;
+        return true;
 #else
-            pointerCaptured_ = true;
-            return true;
+        pointerCaptured_ = true;
+        return true;
 #endif
-        }
     }
     if (rootLayout_) {
         handled = rootLayout_->onPointerDown(x, y);
@@ -277,17 +281,21 @@ bool Direct2DContext::onPointerMove(float x, float y) {
     lastPointerPosition_ = D2D1::Point2F(x, y);
 #endif
     bool handled = false;
-    if (roomIrSelectorNode_ && roomIrSelectorNode_->isOpen()) {
-        handled = roomIrSelectorNode_->onOverlayPointerMove(x, y);
-        if (handled) {
+    auto routeOverlayMove = [&](const std::shared_ptr<DropdownSelectorNode>& node) {
+        return node && node->isOpen() && node->onOverlayPointerMove(x, y);
+    };
+    if ((headerBarNode_ &&
+         (routeOverlayMove(headerBarNode_->deviceSelector()) ||
+          routeOverlayMove(headerBarNode_->sampleRateSelector()) ||
+          routeOverlayMove(headerBarNode_->bufferFramesSelector()))) ||
+        routeOverlayMove(roomIrSelectorNode_)) {
 #if SATORI_UI_DEBUG_ENABLED
-            const bool selectionChanged = updateDebugSelection(x, y);
-            (void)selectionChanged;
-            return true;
+        const bool selectionChanged = updateDebugSelection(x, y);
+        (void)selectionChanged;
+        return true;
 #else
-            return true;
+        return true;
 #endif
-        }
     }
     if (rootLayout_) {
         handled = rootLayout_->onPointerMove(x, y);
@@ -390,8 +398,8 @@ void Direct2DContext::dumpLayoutDebugInfo() {
     output << L"[SatoriWin][Layout] client=" << width_ << L"x" << height_
            << L"\n";
     output << L"  root      " << formatRect(rootLayout_->bounds()) << L"\n";
-    if (topBarNode_) {
-        output << L"  topbar    " << formatRect(topBarNode_->bounds()) << L"\n";
+    if (headerBarNode_) {
+        output << L"  header    " << formatRect(headerBarNode_->bounds()) << L"\n";
     }
     if (buttonBarNode_) {
         output << L"  buttons   " << formatRect(buttonBarNode_->bounds()) << L"\n";
@@ -656,9 +664,17 @@ void Direct2DContext::render() {
                drawActiveTooltip(bodyKnobsNode_) ||
                drawActiveTooltip(roomKnobsNode_));
         // Draw dropdown overlay last so it appears above knobs/cards.
-        if (roomIrSelectorNode_ && roomIrSelectorNode_->isOpen()) {
-            roomIrSelectorNode_->drawOverlay(resources);
+        auto drawDropdownOverlay = [&](const std::shared_ptr<DropdownSelectorNode>& node) {
+            if (node && node->isOpen()) {
+                node->drawOverlay(resources);
+            }
+        };
+        if (headerBarNode_) {
+            drawDropdownOverlay(headerBarNode_->deviceSelector());
+            drawDropdownOverlay(headerBarNode_->sampleRateSelector());
+            drawDropdownOverlay(headerBarNode_->bufferFramesSelector());
         }
+        drawDropdownOverlay(roomIrSelectorNode_);
 #if SATORI_UI_DEBUG_ENABLED
         drawDebugOverlay();
 #endif
@@ -671,8 +687,8 @@ void Direct2DContext::render() {
 }
 
 void Direct2DContext::rebuildLayout() {
-    // Header/toolbar removed for now to focus on the synth surface.
-    topBarNode_.reset();
+    headerBarNode_ = std::make_shared<HeaderBarNode>();
+    headerBarNode_->setModel(model_.headerBar);
     buttonBarNode_.reset();
 
     // Unified modules: create one preview + one knob panel per FlowModule.
@@ -788,6 +804,7 @@ void Direct2DContext::rebuildLayout() {
 
     auto rootStack = std::make_shared<UIStackPanel>(8.0f);
     std::vector<UIStackPanel::Item> items;
+    items.push_back({headerBarNode_, {UISizeMode::kFixed, 56.0f, 56.0f}});
     items.push_back({mainRow, {UISizeMode::kAuto, 0.0f, 480.0f}});
     items.push_back({keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}});
     rootStack->setItems(std::move(items));
@@ -937,8 +954,8 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
             return sel;
         }
     }
-    if (auto topSelection = checkNode(topBarNode_)) {
-        return topSelection;
+    if (auto headerSelection = checkNode(headerBarNode_)) {
+        return headerSelection;
     }
     if (ContainsPoint(rootLayout_->bounds(), x, y)) {
         return MakeLayoutBox(rootLayout_->bounds());

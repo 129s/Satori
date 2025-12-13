@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/CppProject/Satori/build_asio/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

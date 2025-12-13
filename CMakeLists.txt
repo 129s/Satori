@@ -85,12 +85,32 @@ if (WIN32)
 
     add_library(SatoriRealtimeWin STATIC
         src/win/audio/SatoriRealtimeEngine.cpp
+        src/win/audio/UnifiedAudioEngine.cpp
         src/win/audio/WASAPIAudioEngine.cpp
+        src/win/audio/AsioAudioEngine.cpp
     )
     target_include_directories(SatoriRealtimeWin PUBLIC src)
     target_link_libraries(SatoriRealtimeWin
         PUBLIC SatoriCoreLib
-        PRIVATE ole32.lib mmdevapi.lib avrt.lib)
+        PRIVATE ole32.lib mmdevapi.lib avrt.lib advapi32.lib)
+
+    option(SATORI_ENABLE_ASIO "Enable ASIO backend (requires ASIO SDK integration)" OFF)
+    set(SATORI_ASIO_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ASIOSDK" CACHE PATH
+        "Path to Steinberg ASIO SDK root (must contain common/asio.h)")
+    if (SATORI_ENABLE_ASIO)
+        target_compile_definitions(SatoriRealtimeWin PRIVATE SATORI_ENABLE_ASIO=1)
+    else()
+        target_compile_definitions(SatoriRealtimeWin PRIVATE SATORI_ENABLE_ASIO=0)
+    endif()
+
+    set(SATORI_HAS_ASIO_SDK 0)
+    if (SATORI_ENABLE_ASIO AND SATORI_ASIO_SDK_DIR)
+        if (EXISTS "${SATORI_ASIO_SDK_DIR}/common/asio.h" AND EXISTS "${SATORI_ASIO_SDK_DIR}/common/iasiodrv.h")
+            set(SATORI_HAS_ASIO_SDK 1)
+            target_include_directories(SatoriRealtimeWin PRIVATE "${SATORI_ASIO_SDK_DIR}/common")
+        endif()
+    endif()
+    target_compile_definitions(SatoriRealtimeWin PRIVATE SATORI_HAS_ASIO_SDK=${SATORI_HAS_ASIO_SDK})
 
     add_executable(SatoriWinApp WIN32
         src/win/app/SatoriWinMain.cpp
@@ -105,6 +125,7 @@ if (WIN32)
         src/win/ui/layout/UIOverlay.cpp
         src/win/ui/nodes/ButtonBarNode.cpp
         src/win/ui/nodes/HeaderNode.cpp
+        src/win/ui/nodes/HeaderBarNode.cpp
         src/win/ui/nodes/SliderPanelNode.cpp
         src/win/ui/nodes/TextBlockNode.cpp
         src/win/ui/nodes/WaveformNode.cpp

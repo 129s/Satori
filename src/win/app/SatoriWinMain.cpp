@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cwchar>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -19,6 +20,7 @@
 #include "synthesis/KarplusStrongString.h"
 #include "win/app/PresetManager.h"
 #include "win/audio/SatoriRealtimeEngine.h"
+#include "win/audio/UnifiedAudioEngine.h"
 #include "win/ui/Direct2DContext.h"
 #include "win/ui/KeyboardKeymap.h"
 #include "win/ui/UIModel.h"
@@ -37,7 +39,28 @@ constexpr int kKeyboardBaseMidiNote = 48;  // C3
 constexpr int kKeyboardOctaveCount = 3;
 
 std::wstring ToWide(const std::string& text) {
-    return std::wstring(text.begin(), text.end());
+    if (text.empty()) {
+        return L"";
+    }
+    auto convert = [&](UINT codepage, DWORD flags) -> std::wstring {
+        const int size =
+            MultiByteToWideChar(codepage, flags, text.c_str(),
+                                static_cast<int>(text.size()), nullptr, 0);
+        if (size <= 0) {
+            return L"";
+        }
+        std::wstring out;
+        out.resize(static_cast<std::size_t>(size));
+        MultiByteToWideChar(codepage, flags, text.c_str(),
+                            static_cast<int>(text.size()), out.data(), size);
+        return out;
+    };
+    // Prefer UTF-8, fallback to ANSI code page for non-UTF8 builds/drivers.
+    std::wstring w = convert(CP_UTF8, MB_ERR_INVALID_CHARS);
+    if (!w.empty()) {
+        return w;
+    }
+    return convert(CP_ACP, 0);
 }
 
 std::filesystem::path GetExecutableDir() {
@@ -126,6 +149,8 @@ private:
     void refreshFlowDiagram();
     void updateAudioStatus(bool showDialog);
     void updatePresetStatus(const std::wstring& text);
+    void refreshAudioOptions();
+    void applyAudioConfigFromHeader(bool showDialog);
     void syncSynthConfig();
     void scheduleWaveformPreview(double frequency = 440.0);
     void scheduleWaveformPreview(double frequency, UINT delayMs);
@@ -150,6 +175,11 @@ private:
     synthesis::StringConfig synthConfig_{};
     float masterGain_ = 1.0f;
     float ampRelease_ = 0.35f;
+    winaudio::AudioEngineConfig desiredAudioConfig_{};
+    std::vector<std::wstring> audioDeviceItems_;
+    std::vector<std::wstring> audioDeviceKeys_;
+    std::vector<std::uint32_t> audioSampleRateOptions_;
+    std::vector<std::uint32_t> audioBufferFramesOptions_;
     winui::UIMode uiMode_ = winui::UIMode::Play;
     bool audioReady_ = false;
     std::wstring audioStatus_ = L"音频：未初始化";
@@ -193,6 +223,12 @@ bool SatoriAppState::initialize(HWND hwnd) {
     synthConfig_ = engine_->synthConfig();
     masterGain_ = engine_->masterGain();
     ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);
+    desiredAudioConfig_ = engine_->audioConfig();
+    desiredAudioConfig_.sysHandle = reinterpret_cast<std::uintptr_t>(hwnd);
+    if (desiredAudioConfig_.backend == winaudio::AudioBackendType::WasapiShared) {
+        desiredAudioConfig_.sampleRate = 0;
+    }
+    refreshAudioOptions();
     initializeKeyBindings();
     initializePresetSupport();
     updateRoomIrPreviewCache();
@@ -249,6 +285,103 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.audioOnline = audioReady_;
     model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
     model.diagram = buildDiagramState();
+
+    auto findIndexU32 = [](const std::vector<std::uint32_t>& list, std::uint32_t value) {
+        const auto it = std::find(list.begin(), list.end(), value);
+        return it == list.end() ? 0 : static_cast<int>(std::distance(list.begin(), it));
+    };
+    auto findIndexStr = [](const std::vector<std::wstring>& list, const std::wstring& value) {
+        const auto it = std::find(list.begin(), list.end(), value);
+        return it == list.end() ? 0 : static_cast<int>(std::distance(list.begin(), it));
+    };
+    auto makeDeviceKey = [](winaudio::AudioBackendType backend, const std::wstring& id) {
+        const wchar_t* prefix =
+            (backend == winaudio::AudioBackendType::Asio) ? L"asio|" : L"wasapi|";
+        return std::wstring(prefix) + id;
+    };
+
+    model.headerBar.logoText = L"Satori";
+    if (engine_) {
+        const auto cfg = engine_->audioConfig();
+        const auto sr = cfg.sampleRate;
+        const bool asio = cfg.backend == winaudio::AudioBackendType::Asio;
+        if (sr > 0) {
+            model.headerBar.mixSampleRateText =
+                (asio ? L"ASIO " : L"Mix ") + std::to_wstring(sr) + L" Hz";
+        }
+    }
+    model.headerBar.device.label = L"Device";
+    model.headerBar.device.items = audioDeviceItems_;
+    model.headerBar.device.pageSize = 8;
+    model.headerBar.device.selectedIndex =
+        findIndexStr(audioDeviceKeys_, makeDeviceKey(desiredAudioConfig_.backend, desiredAudioConfig_.deviceId));
+    model.headerBar.device.onChanged = [this](int index) {
+        if (index < 0 || static_cast<std::size_t>(index) >= audioDeviceKeys_.size()) {
+            return;
+        }
+        const auto& key = audioDeviceKeys_[static_cast<std::size_t>(index)];
+        constexpr wchar_t kWasapiPrefix[] = L"wasapi|";
+        constexpr wchar_t kAsioPrefix[] = L"asio|";
+        if (key.rfind(kAsioPrefix, 0) == 0) {
+            desiredAudioConfig_.backend = winaudio::AudioBackendType::Asio;
+            desiredAudioConfig_.deviceId = key.substr(std::wcslen(kAsioPrefix));
+        } else if (key.rfind(kWasapiPrefix, 0) == 0) {
+            desiredAudioConfig_.backend = winaudio::AudioBackendType::WasapiShared;
+            desiredAudioConfig_.deviceId = key.substr(std::wcslen(kWasapiPrefix));
+        } else {
+            desiredAudioConfig_.backend = winaudio::AudioBackendType::WasapiShared;
+            desiredAudioConfig_.deviceId = L"";
+        }
+        applyAudioConfigFromHeader(/*showDialog=*/true);
+    };
+
+    const bool usingAsio = desiredAudioConfig_.backend == winaudio::AudioBackendType::Asio;
+    model.headerBar.sampleRate.label = usingAsio ? L"SampleRate" : L"Engine SR";
+    model.headerBar.sampleRate.pageSize = 8;
+    model.headerBar.sampleRate.items.clear();
+    model.headerBar.sampleRate.items.reserve(audioSampleRateOptions_.size());
+    for (auto sr : audioSampleRateOptions_) {
+        model.headerBar.sampleRate.items.push_back(std::to_wstring(sr));
+    }
+    const std::uint32_t currentEngineSr =
+        static_cast<std::uint32_t>(std::lround(std::max(0.0, synthConfig_.sampleRate)));
+    const std::uint32_t currentDeviceSr = engine_ ? engine_->audioConfig().sampleRate : 0u;
+    model.headerBar.sampleRate.selectedIndex = findIndexU32(
+        audioSampleRateOptions_,
+        usingAsio ? (desiredAudioConfig_.sampleRate > 0 ? desiredAudioConfig_.sampleRate : currentDeviceSr)
+                  : currentEngineSr);
+    model.headerBar.sampleRate.onChanged = [this](int index) {
+        if (index < 0 || static_cast<std::size_t>(index) >= audioSampleRateOptions_.size()) {
+            return;
+        }
+        const std::uint32_t sr = audioSampleRateOptions_[static_cast<std::size_t>(index)];
+        if (desiredAudioConfig_.backend == winaudio::AudioBackendType::Asio) {
+            desiredAudioConfig_.sampleRate = sr;
+            applyAudioConfigFromHeader(/*showDialog=*/true);
+        } else {
+            synthConfig_.sampleRate = static_cast<double>(sr);
+            syncSynthConfig();
+            refreshUI();
+        }
+    };
+
+    model.headerBar.bufferFrames.label = L"BufferFrames";
+    model.headerBar.bufferFrames.pageSize = 8;
+    model.headerBar.bufferFrames.items.clear();
+    model.headerBar.bufferFrames.items.reserve(audioBufferFramesOptions_.size());
+    for (auto bf : audioBufferFramesOptions_) {
+        model.headerBar.bufferFrames.items.push_back(std::to_wstring(bf));
+    }
+    model.headerBar.bufferFrames.selectedIndex =
+        findIndexU32(audioBufferFramesOptions_, desiredAudioConfig_.bufferFrames);
+    model.headerBar.bufferFrames.onChanged = [this](int index) {
+        if (index < 0 || static_cast<std::size_t>(index) >= audioBufferFramesOptions_.size()) {
+            return;
+        }
+        desiredAudioConfig_.bufferFrames =
+            audioBufferFramesOptions_[static_cast<std::size_t>(index)];
+        applyAudioConfigFromHeader(/*showDialog=*/true);
+    };
 
     auto makeModule = [](std::wstring title, winui::FlowModule module,
                          bool shared) {
@@ -523,13 +656,65 @@ void SatoriAppState::refreshUI() {
     d2d_->setModel(buildUIModel());
 }
 
+void SatoriAppState::refreshAudioOptions() {
+    if (!audioSampleRateOptions_.empty() && !audioBufferFramesOptions_.empty() &&
+        !audioDeviceItems_.empty() && !audioDeviceKeys_.empty()) {
+        return;
+    }
+
+    // Sample rate options (common device rates).
+    audioSampleRateOptions_ = {44100, 48000, 88200, 96000, 176400, 192000};
+
+    // Buffer sizes commonly seen in shared-mode WASAPI (device-period based or power-of-two).
+    audioBufferFramesOptions_ = {128, 192, 240, 256, 384, 480, 512, 768,
+                                 960, 1024, 1536, 1920, 2048, 4096};
+
+    audioDeviceItems_.clear();
+    audioDeviceKeys_.clear();
+
+    for (const auto& dev : winaudio::UnifiedAudioEngine::EnumerateDevices()) {
+        const wchar_t* tag =
+            (dev.backend == winaudio::AudioBackendType::Asio) ? L"ASIO: " : L"WASAPI: ";
+        audioDeviceItems_.push_back(std::wstring(tag) + dev.name);
+        const wchar_t* prefix =
+            (dev.backend == winaudio::AudioBackendType::Asio) ? L"asio|" : L"wasapi|";
+        audioDeviceKeys_.push_back(std::wstring(prefix) + dev.id);
+    }
+}
+
+void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {
+    if (!engine_) {
+        return;
+    }
+    if (window_) {
+        desiredAudioConfig_.sysHandle = reinterpret_cast<std::uintptr_t>(window_);
+    }
+
+    engine_->stop();
+    const bool ok = engine_->reconfigureAudio(desiredAudioConfig_);
+    audioReady_ = ok && engine_->start();
+    if (ok) {
+        desiredAudioConfig_ = engine_->audioConfig();
+        if (desiredAudioConfig_.backend == winaudio::AudioBackendType::WasapiShared) {
+            desiredAudioConfig_.sampleRate = 0;
+        }
+        synthConfig_ = engine_->synthConfig();
+        masterGain_ = engine_->masterGain();
+        ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);
+        updateRoomIrPreviewCache();
+        refreshFlowDiagram();
+        refreshWaveformPreview(lastAuditionFrequency_);
+    }
+    updateAudioStatus(showDialog && !audioReady_);
+}
+
 void SatoriAppState::updateAudioStatus(bool showDialog) {
     if (audioReady_) {
         std::wstringstream ss;
-        ss << L"????? (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz)";
+        ss << L"音频：在线 (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz)";
         audioStatus_ = ss.str();
     } else {
-        std::wstring message = L"?????";
+        std::wstring message = L"音频：初始化失败";
         if (engine_) {
             const auto& lastError = engine_->lastError();
             if (!lastError.empty()) {

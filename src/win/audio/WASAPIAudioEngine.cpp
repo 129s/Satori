@@ -6,6 +6,9 @@
 #include <sstream>
 #include <thread>
 
+#include <functiondiscoverykeys_devpkey.h>
+#include <propsys.h>
+
 #include "dsp/Denormals.h"
 
 namespace winaudio {
@@ -38,15 +41,41 @@ public:
         format_ = nullptr;
         return tmp;
     }
+    void reset(WAVEFORMATEX* format) {
+        if (format_ == format) {
+            return;
+        }
+        if (format_) {
+            CoTaskMemFree(format_);
+        }
+        format_ = format;
+    }
 
 private:
     WAVEFORMATEX* format_ = nullptr;
 };
 
+struct PropVariantHolder {
+    PROPVARIANT v{};
+    PropVariantHolder() { PropVariantInit(&v); }
+    ~PropVariantHolder() { PropVariantClear(&v); }
+};
+
+bool SetWaveFormatSampleRate(WAVEFORMATEX* format, uint32_t sampleRate) {
+    if (!format || sampleRate == 0) {
+        return false;
+    }
+    format->nSamplesPerSec = sampleRate;
+    format->nAvgBytesPerSec = sampleRate * format->nBlockAlign;
+    return true;
+}
+
 }  // namespace
 
 WASAPIAudioEngine::WASAPIAudioEngine(AudioEngineConfig config)
-    : config_(config) {}
+    : config_(std::move(config)) {
+    config_.backend = AudioBackendType::WasapiShared;
+}
 
 WASAPIAudioEngine::~WASAPIAudioEngine() {
     shutdown();
@@ -64,6 +93,12 @@ bool WASAPIAudioEngine::initialize(RenderCallback callback) {
     }
     initialized_ = configureEngine(renderCallback_);
     return initialized_;
+}
+
+bool WASAPIAudioEngine::reinitialize(AudioEngineConfig config, RenderCallback callback) {
+    shutdown();
+    config_ = std::move(config);
+    return initialize(std::move(callback));
 }
 
 void WASAPIAudioEngine::shutdown() {
@@ -114,9 +149,14 @@ bool WASAPIAudioEngine::createDevice() {
         LogError(message);
         return false;
     }
-    hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+    if (!config_.deviceId.empty()) {
+        hr = enumerator_->GetDevice(config_.deviceId.c_str(), &device_);
+    } else {
+        hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+    }
     if (FAILED(hr)) {
-        const auto message = FormatHResult("GetDefaultAudioEndpoint", hr);
+        const auto message = FormatHResult(
+            config_.deviceId.empty() ? "GetDefaultAudioEndpoint" : "GetDevice", hr);
         setLastError(message);
         LogError(message);
         return false;
@@ -172,6 +212,9 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
         return false;
     }
 
+    const uint32_t requestedSampleRate = config_.sampleRate;
+    const uint32_t requestedBufferFrames = config_.bufferFrames;
+
     MixFormatHolder mixFormat;
     HRESULT hr = audioClient_->GetMixFormat(&mixFormat);
     if (FAILED(hr) || mixFormat.get() == nullptr) {
@@ -180,8 +223,36 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
         LogError(message);
         return false;
     }
+
+    // Keep the device's default channel layout, but allow requesting a different
+    // sample rate when supported in shared mode.
+    const uint32_t defaultSampleRate = mixFormat.get()->nSamplesPerSec;
+    if (requestedSampleRate > 0 && requestedSampleRate != defaultSampleRate) {
+        const uint32_t oldRate = mixFormat.get()->nSamplesPerSec;
+        const uint32_t oldAvgBytes = mixFormat.get()->nAvgBytesPerSec;
+        SetWaveFormatSampleRate(mixFormat.get(), requestedSampleRate);
+
+        WAVEFORMATEX* closest = nullptr;
+        hr = audioClient_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, mixFormat.get(),
+                                             &closest);
+        if (hr == S_OK) {
+            // Keep requested format.
+        } else if (hr == S_FALSE && closest) {
+            // Use closest match and reflect the actual configuration.
+            mixFormat.reset(closest);
+        } else {
+            // Unsupported: revert to device mix format sample rate.
+            mixFormat.get()->nSamplesPerSec = oldRate;
+            mixFormat.get()->nAvgBytesPerSec = oldAvgBytes;
+            if (closest) {
+                CoTaskMemFree(closest);
+            }
+        }
+    }
+
     config_.sampleRate = mixFormat.get()->nSamplesPerSec;
     config_.channels = mixFormat.get()->nChannels;
+    config_.bufferFrames = requestedBufferFrames;
 
     REFERENCE_TIME bufferDuration = static_cast<REFERENCE_TIME>(
         10000000LL * config_.bufferFrames / config_.sampleRate);
@@ -234,6 +305,76 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
         return false;
     }
     return true;
+}
+
+std::vector<AudioDeviceInfo> WASAPIAudioEngine::EnumerateOutputDevices() {
+    std::vector<AudioDeviceInfo> devices;
+
+    const HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool comInitialized = SUCCEEDED(initHr);
+
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                  IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr) || !enumerator) {
+        if (comInitialized) {
+            CoUninitialize();
+        }
+        return devices;
+    }
+
+    Microsoft::WRL::ComPtr<IMMDeviceCollection> collection;
+    hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
+    if (FAILED(hr) || !collection) {
+        if (comInitialized) {
+            CoUninitialize();
+        }
+        return devices;
+    }
+
+    UINT count = 0;
+    hr = collection->GetCount(&count);
+    if (FAILED(hr)) {
+        if (comInitialized) {
+            CoUninitialize();
+        }
+        return devices;
+    }
+
+    devices.reserve(count);
+    for (UINT i = 0; i < count; ++i) {
+        Microsoft::WRL::ComPtr<IMMDevice> device;
+        if (FAILED(collection->Item(i, &device)) || !device) {
+            continue;
+        }
+
+        LPWSTR id = nullptr;
+        if (FAILED(device->GetId(&id)) || !id) {
+            continue;
+        }
+
+        std::wstring name = L"(unknown)";
+        Microsoft::WRL::ComPtr<IPropertyStore> store;
+        if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store)) && store) {
+            PropVariantHolder pv;
+            if (SUCCEEDED(store->GetValue(PKEY_Device_FriendlyName, &pv.v)) &&
+                pv.v.vt == VT_LPWSTR && pv.v.pwszVal) {
+                name = pv.v.pwszVal;
+            }
+        }
+
+        AudioDeviceInfo info;
+        info.backend = AudioBackendType::WasapiShared;
+        info.id = std::wstring(id);
+        info.name = std::move(name);
+        devices.push_back(std::move(info));
+        CoTaskMemFree(id);
+    }
+
+    if (comInitialized) {
+        CoUninitialize();
+    }
+    return devices;
 }
 
 void WASAPIAudioEngine::renderLoop() {

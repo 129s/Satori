@@ -73,6 +73,22 @@ struct ModuleUI {
     std::vector<ModuleParamDescriptor> params;
 };
 
+struct DropdownModel {
+    std::wstring label;
+    std::vector<std::wstring> items;
+    int selectedIndex = 0;
+    int pageSize = 6;
+    std::function<void(int)> onChanged;
+};
+
+struct HeaderBarModel {
+    std::wstring logoText = L"Satori";
+    std::wstring mixSampleRateText;
+    DropdownModel device;
+    DropdownModel sampleRate;
+    DropdownModel bufferFrames;
+};
+
 struct UIModel {
     std::vector<std::wstring> instructions;
     UIMode mode = UIMode::Play;
@@ -85,6 +101,7 @@ struct UIModel {
     std::vector<float> waveformSamples;
     bool audioOnline = false;
     float sampleRate = 0.0f;
+    HeaderBarModel headerBar;
     FlowDiagramState diagram;
 };
 

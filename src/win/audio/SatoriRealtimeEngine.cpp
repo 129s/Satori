@@ -1,15 +1,18 @@
 #include "win/audio/SatoriRealtimeEngine.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <windows.h>
 #include <utility>
+#include <vector>
 
 namespace winaudio {
 
 SatoriRealtimeEngine::SatoriRealtimeEngine()
-    : audioConfig_({44100, 1, 512}),
+    : audioConfig_({AudioBackendType::WasapiShared, L"", 0, 0, 1, 512}),
       synthConfig_(),
       audioEngine_(audioConfig_),
       synthEngine_(synthConfig_) {}
@@ -35,6 +38,32 @@ bool SatoriRealtimeEngine::initialize() {
         pendingParamMask_.store(0, std::memory_order_relaxed);
     }
     return ok;
+}
+
+bool SatoriRealtimeEngine::reconfigureAudio(const AudioEngineConfig& config) {
+    const bool wasRunning = audioEngine_.isRunning();
+    if (wasRunning) {
+        audioEngine_.stop();
+    }
+    const bool ok = audioEngine_.reinitialize(
+        config, [this](float* buffer, std::size_t frames) { handleRender(buffer, frames); });
+    if (!ok) {
+        return false;
+    }
+    audioConfig_ = audioEngine_.config();
+    if (audioConfig_.backend == AudioBackendType::Asio && audioConfig_.sampleRate > 0) {
+        synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+        synthEngine_.setSampleRate(synthConfig_.sampleRate);
+    } else if (synthConfig_.sampleRate <= 0.0) {
+        synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+        synthEngine_.setSampleRate(synthConfig_.sampleRate);
+    }
+    synthEngine_.setConfig(synthConfig_);
+    resetResampler();
+    if (wasRunning) {
+        (void)audioEngine_.start();
+    }
+    return true;
 }
 
 void SatoriRealtimeEngine::shutdown() {
@@ -64,13 +93,19 @@ void SatoriRealtimeEngine::noteOff(int midiNote) {
 
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
     synthesis::StringConfig clamped = config;
-    clamped.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+    if (clamped.sampleRate <= 0.0) {
+        clamped.sampleRate = synthConfig_.sampleRate > 0.0
+                                 ? synthConfig_.sampleRate
+                                 : static_cast<double>(audioConfig_.sampleRate);
+    }
     synthConfig_ = clamped;
     const bool wasRunning = audioEngine_.isRunning();
     if (wasRunning) {
         audioEngine_.stop();
     }
-    synthEngine_.setConfig(clamped);
+    synthEngine_.setSampleRate(synthConfig_.sampleRate);
+    synthEngine_.setConfig(synthConfig_);
+    resetResampler();
     masterGain_ = synthEngine_.getParam(engine::ParamId::MasterGain);
     ampReleaseSeconds_ = synthEngine_.getParam(engine::ParamId::AmpRelease);
     if (wasRunning) {
@@ -226,11 +261,56 @@ void SatoriRealtimeEngine::handleRender(float* output, std::size_t frames) {
 
     applyPendingParams();
 
-    engine::ProcessBlock block;
-    block.output = output;
-    block.frames = frames;
-    block.channels = audioConfig_.channels;
-    synthEngine_.process(block);
+    const std::size_t channels = static_cast<std::size_t>(audioConfig_.channels);
+    const double outRate = static_cast<double>(audioConfig_.sampleRate);
+    const double inRate = synthConfig_.sampleRate;
+
+    if (channels == 0 || outRate <= 0.0 || inRate <= 0.0 ||
+        std::abs(inRate - outRate) < 1e-6) {
+        engine::ProcessBlock block;
+        block.output = output;
+        block.frames = frames;
+        block.channels = audioConfig_.channels;
+        synthEngine_.process(block);
+    } else {
+        const bool needReset = (resampleChannels_ != channels) ||
+                               (std::abs(resampleInRate_ - inRate) > 1e-6) ||
+                               (std::abs(resampleOutRate_ - outRate) > 1e-6);
+        if (needReset) {
+            resampleChannels_ = channels;
+            resampleInRate_ = inRate;
+            resampleOutRate_ = outRate;
+            resampleStep_ = resampleInRate_ / resampleOutRate_;
+            resetResampler();
+        }
+
+        if (!resampleReady_) {
+            resampleFrame0_.assign(channels, 0.0f);
+            resampleFrame1_.assign(channels, 0.0f);
+            ensureResampleInputFrames(2);
+            popResampleInputFrame(resampleFrame0_);
+            popResampleInputFrame(resampleFrame1_);
+            resampleReady_ = true;
+        }
+
+        const float phaseEps = 1e-7f;
+        for (std::size_t f = 0; f < frames; ++f) {
+            const float t = static_cast<float>(std::clamp(resamplePhase_, 0.0, 1.0));
+            const float a = 1.0f - t;
+            const std::size_t base = f * channels;
+            for (std::size_t ch = 0; ch < channels; ++ch) {
+                output[base + ch] = resampleFrame0_[ch] * a + resampleFrame1_[ch] * t;
+            }
+
+            resamplePhase_ += resampleStep_;
+            while (resamplePhase_ >= 1.0 - phaseEps) {
+                resamplePhase_ -= 1.0;
+                resampleFrame0_ = resampleFrame1_;
+                ensureResampleInputFrames(1);
+                popResampleInputFrame(resampleFrame1_);
+            }
+        }
+    }
 
     QueryPerformanceCounter(&end);
     const double elapsedMs =
@@ -249,6 +329,64 @@ void SatoriRealtimeEngine::handleRender(float* output, std::size_t frames) {
     if (elapsedMs > prevMax) {
         callbackMsMax_.store(elapsedMs, std::memory_order_relaxed);
     }
+}
+
+void SatoriRealtimeEngine::resetResampler() {
+    resamplePhase_ = 0.0;
+    resampleFifo_.clear();
+    resampleReadSample_ = 0;
+    resampleFrame0_.clear();
+    resampleFrame1_.clear();
+    resampleReady_ = false;
+}
+
+void SatoriRealtimeEngine::ensureResampleInputFrames(std::size_t frames) {
+    const std::size_t channels = static_cast<std::size_t>(audioConfig_.channels);
+    if (channels == 0) {
+        return;
+    }
+    if (resampleReadSample_ > 0 && resampleReadSample_ >= 8192 * channels) {
+        resampleFifo_.erase(resampleFifo_.begin(),
+                            resampleFifo_.begin() + static_cast<std::ptrdiff_t>(resampleReadSample_));
+        resampleReadSample_ = 0;
+    }
+
+    const std::size_t availableSamples =
+        resampleFifo_.size() >= resampleReadSample_ ? (resampleFifo_.size() - resampleReadSample_) : 0;
+    const std::size_t availableFrames = availableSamples / channels;
+    if (availableFrames >= frames) {
+        return;
+    }
+
+    const std::size_t need = frames - availableFrames;
+    const std::size_t renderFrames = std::max<std::size_t>(need, 256);
+
+    std::vector<float> temp(renderFrames * channels, 0.0f);
+    engine::ProcessBlock block{temp.data(), renderFrames, static_cast<uint16_t>(channels)};
+    synthEngine_.process(block);
+    resampleFifo_.insert(resampleFifo_.end(), temp.begin(), temp.end());
+}
+
+void SatoriRealtimeEngine::popResampleInputFrame(std::vector<float>& frame) {
+    const std::size_t channels = static_cast<std::size_t>(audioConfig_.channels);
+    if (channels == 0) {
+        frame.clear();
+        return;
+    }
+    frame.resize(channels);
+    ensureResampleInputFrames(1);
+
+    const std::size_t availableSamples =
+        resampleFifo_.size() >= resampleReadSample_ ? (resampleFifo_.size() - resampleReadSample_) : 0;
+    if (availableSamples < channels) {
+        std::fill(frame.begin(), frame.end(), 0.0f);
+        return;
+    }
+
+    for (std::size_t ch = 0; ch < channels; ++ch) {
+        frame[ch] = resampleFifo_[resampleReadSample_ + ch];
+    }
+    resampleReadSample_ += channels;
 }
 
 }  // namespace winaudio

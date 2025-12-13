@@ -27,11 +27,9 @@ TEST_CASE("WASAPIAudioEngine 能完成初始化", "[wasapi]") {
     config.bufferFrames = 256;
     winaudio::WASAPIAudioEngine engine(config);
     std::atomic<int> callbackCount{0};
-    auto callback = [&callbackCount](float* output, std::size_t frames) {
-        const std::size_t total = frames;
-        for (std::size_t i = 0; i < total; ++i) {
-            output[i] = 0.0f;
-        }
+    auto callback = [&engine, &callbackCount](float* output, std::size_t frames) {
+        const std::size_t channels = engine.config().channels;
+        std::fill_n(output, frames * channels, 0.0f);
         ++callbackCount;
     };
     REQUIRE(engine.initialize(callback));
@@ -53,21 +51,21 @@ TEST_CASE("SatoriRealtimeEngine 支持触发音符", "[realtime-engine]") {
     engine.shutdown();
 }
 
-TEST_CASE("SatoriRealtimeEngine 初始化后同步设备采样率", "[realtime-engine]") {
+TEST_CASE("SatoriRealtimeEngine 支持更改工作采样率", "[realtime-engine]") {
     ScopedCOM com;
     winaudio::SatoriRealtimeEngine engine;
     REQUIRE(engine.initialize());
 
-    const double deviceSampleRate = engine.synthConfig().sampleRate;
+    const double deviceSampleRate = static_cast<double>(engine.audioConfig().sampleRate);
     REQUIRE(deviceSampleRate > 0.0);
 
     synthesis::StringConfig alteredConfig = engine.synthConfig();
-    alteredConfig.sampleRate = deviceSampleRate + 1000.0;
+    alteredConfig.sampleRate = (std::abs(deviceSampleRate - 48000.0) < 1e-6) ? 44100.0 : 48000.0;
     alteredConfig.decay = 0.992f;
     engine.setSynthConfig(alteredConfig);
 
     const auto& syncedConfig = engine.synthConfig();
-    REQUIRE(syncedConfig.sampleRate == Catch::Approx(deviceSampleRate));
+    REQUIRE(syncedConfig.sampleRate == Catch::Approx(alteredConfig.sampleRate));
     REQUIRE(syncedConfig.decay == Catch::Approx(alteredConfig.decay));
 }
 
