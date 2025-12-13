@@ -375,7 +375,8 @@ void ParameterKnob::drawBody(ID2D1HwndRenderTarget* target,
         const D2D1_POINT_2F endPoint = D2D1::Point2F(
             layout.center.x + std::cos(endAngle) * slotRadius,
             layout.center.y + std::sin(endAngle) * slotRadius);
-        const float dotR = slotThickness * (active ? 0.50f : 0.42f);
+        // 端点圆的直径需要与弧线截面（strokeWidth）一致，否则默认状态会显得“缩一圈”。
+        const float dotR = slotThickness * 0.50f;
         target->FillEllipse(D2D1::Ellipse(endPoint, dotR, dotR), slotBrush);
     }
 
