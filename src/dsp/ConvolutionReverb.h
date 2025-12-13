@@ -17,7 +17,7 @@ public:
     void setSampleRate(double sampleRate);
 
     void setMix(float mix01);     // 0..1
-    float mix() const { return mix_; }
+    float mix() const { return targetMix_; }
 
     void setIrKernels(std::vector<ConvolutionKernel> kernels);
     int irCount() const { return static_cast<int>(kernels_.size()); }
@@ -39,7 +39,9 @@ private:
     std::size_t blockSize_ = 256;
     std::size_t fftSize_ = 512;
 
-    float mix_ = 0.0f;
+    float targetMix_ = 0.0f;
+    float currentMix_ = 0.0f;
+    float mixSmoothingAlpha_ = 1.0f;
 
     std::vector<ConvolutionKernel> kernels_;
     int irIndex_ = 0;
@@ -47,9 +49,11 @@ private:
 
     // Crossfade between IRs (in blocks).
     int fadeTotalBlocks_ = 16;  // ~90ms at 44.1k with 256-blocks
-    int fadeBlockPos_ = 0;
+    std::size_t fadeSamplePos_ = 0;
 
     PartitionedConvolver convolver_;
+    std::vector<float> overlapA_;
+    std::vector<float> overlapB_;
     std::vector<float> inBlock_;
     std::vector<float> wetBlockA_;
     std::vector<float> wetBlockB_;

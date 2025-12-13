@@ -53,12 +53,21 @@ void PartitionedConvolver::pushInputBlock(const float* input) {
 }
 
 void PartitionedConvolver::convolve(const ConvolutionKernel& kernel, float* out) {
+    convolveWithOverlap(kernel, out, overlap_);
+}
+
+void PartitionedConvolver::convolveWithOverlap(const ConvolutionKernel& kernel,
+                                               float* out,
+                                               std::vector<float>& overlap) {
     if (!out || blockSize_ == 0 || fftSize_ == 0 || xRing_.empty()) {
         return;
     }
     if (kernel.partitions.empty()) {
         std::fill(out, out + blockSize_, 0.0f);
         return;
+    }
+    if (overlap.size() != blockSize_) {
+        overlap.assign(blockSize_, 0.0f);
     }
 
     const std::size_t partCount = kernel.partitions.size();
@@ -84,8 +93,8 @@ void PartitionedConvolver::convolve(const ConvolutionKernel& kernel, float* out)
     // Overlap-add: output first block, keep second block as overlap.
     for (std::size_t i = 0; i < blockSize_; ++i) {
         const float v = workTime_[i].real();
-        out[i] = v + overlap_[i];
-        overlap_[i] = workTime_[i + blockSize_].real();
+        out[i] = v + overlap[i];
+        overlap[i] = workTime_[i + blockSize_].real();
     }
 }
 
@@ -122,4 +131,3 @@ ConvolutionKernel PartitionedConvolver::buildKernelFromIr(const std::vector<floa
 }
 
 }  // namespace dsp
-

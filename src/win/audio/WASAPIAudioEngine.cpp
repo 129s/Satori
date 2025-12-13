@@ -91,6 +91,9 @@ void WASAPIAudioEngine::stop() {
         return;
     }
     running_ = false;
+    if (audioEvent_) {
+        SetEvent(audioEvent_);
+    }
     if (renderThread_ && renderThread_->joinable()) {
         renderThread_->join();
     }

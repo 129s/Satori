@@ -27,6 +27,9 @@ public:
 
     void pushInputBlock(const float* input);          // input length = blockSize
     void convolve(const ConvolutionKernel& kernel, float* out);  // out length = blockSize
+    void convolveWithOverlap(const ConvolutionKernel& kernel,
+                             float* out,
+                             std::vector<float>& overlap);  // overlap length = blockSize
 
     static ConvolutionKernel buildKernelFromIr(const std::vector<float>& ir,
                                                std::size_t blockSize,
@@ -48,4 +51,3 @@ private:
 };
 
 }  // namespace dsp
-

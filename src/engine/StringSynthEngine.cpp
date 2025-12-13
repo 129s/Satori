@@ -95,6 +95,9 @@ public:
         if (sampleRate <= 0.0) {
             return;
         }
+        if (!kernels_.empty() && std::lround(sampleRate_) == std::lround(sampleRate)) {
+            return;
+        }
         sampleRate_ = sampleRate;
         rebuildKernels();
         reverb_.setSampleRate(sampleRate_);
