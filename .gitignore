@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+build_asio/
 
 # Generated audio demos
 *.wav

@@ -1,3 +1,0 @@
-#include "win/resources/ResourceIds.h"
-
-IDR_FONT_NUNITO_REGULAR RCDATA "D:\\CppProject\\Satori\\assets\\Fonts\\Nunito-Regular.ttf"

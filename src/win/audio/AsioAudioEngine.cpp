@@ -8,10 +8,16 @@
 #include <utility>
 
 #include <windows.h>
+#include <objbase.h>
+#include <unknwn.h>
+
+#ifndef interface
+#define interface struct
+#endif
 
 #if defined(SATORI_ENABLE_ASIO) && (SATORI_ENABLE_ASIO != 0) && defined(SATORI_HAS_ASIO_SDK) && (SATORI_HAS_ASIO_SDK != 0)
-#include "asio.h"
 #include "asiosys.h"
+#include "asio.h"
 #include "iasiodrv.h"
 #endif
 
@@ -231,7 +237,6 @@ long AsioAudioEngine::Impl::asioMessage(long selector, long value, void*, double
             switch (value) {
                 case kAsioEngineVersion:
                 case kAsioSupportsTimeInfo:
-                case kAsioCanOutputReady:
                     return 1;
                 default:
                     return 0;
@@ -242,9 +247,6 @@ long AsioAudioEngine::Impl::asioMessage(long selector, long value, void*, double
             return 1;
         case kAsioSupportsTimeCode:
             return 0;
-        case kAsioCanOutputReady:
-            self->impl_->supportsOutputReady = true;
-            return 1;
         default:
             break;
     }

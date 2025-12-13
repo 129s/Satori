@@ -94,9 +94,24 @@ if (WIN32)
         PUBLIC SatoriCoreLib
         PRIVATE ole32.lib mmdevapi.lib avrt.lib advapi32.lib)
 
-    option(SATORI_ENABLE_ASIO "Enable ASIO backend (requires ASIO SDK integration)" OFF)
-    set(SATORI_ASIO_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ASIOSDK" CACHE PATH
+    option(SATORI_DISABLE_ASIO "Disable ASIO backend even if SDK is present" OFF)
+    # Keep ASIO enabled by default (single-build setup). This is forced so that
+    # existing build directories don't get stuck with an old cached OFF value.
+    set(SATORI_ENABLE_ASIO ON CACHE BOOL
+        "Enable ASIO backend (requires ASIO SDK integration)" FORCE)
+    set(_SATORI_DEFAULT_ASIO_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ASIOSDK")
+    set(SATORI_ASIO_SDK_DIR "${_SATORI_DEFAULT_ASIO_SDK_DIR}" CACHE PATH
         "Path to Steinberg ASIO SDK root (must contain common/asio.h)")
+    # If an existing build directory cached an empty SDK path, recover to the
+    # in-repo default so ASIO stays actually usable in a single `build/` setup.
+    if (SATORI_ENABLE_ASIO AND (NOT SATORI_ASIO_SDK_DIR))
+        set(SATORI_ASIO_SDK_DIR "${_SATORI_DEFAULT_ASIO_SDK_DIR}" CACHE PATH
+            "Path to Steinberg ASIO SDK root (must contain common/asio.h)" FORCE)
+    endif()
+    if (SATORI_DISABLE_ASIO)
+        set(SATORI_ENABLE_ASIO OFF CACHE BOOL
+            "Enable ASIO backend (requires ASIO SDK integration)" FORCE)
+    endif()
     if (SATORI_ENABLE_ASIO)
         target_compile_definitions(SatoriRealtimeWin PRIVATE SATORI_ENABLE_ASIO=1)
     else()
@@ -108,6 +123,10 @@ if (WIN32)
         if (EXISTS "${SATORI_ASIO_SDK_DIR}/common/asio.h" AND EXISTS "${SATORI_ASIO_SDK_DIR}/common/iasiodrv.h")
             set(SATORI_HAS_ASIO_SDK 1)
             target_include_directories(SatoriRealtimeWin PRIVATE "${SATORI_ASIO_SDK_DIR}/common")
+        else()
+            message(FATAL_ERROR
+                "SATORI_ENABLE_ASIO=ON but ASIO SDK headers not found under: ${SATORI_ASIO_SDK_DIR}/common "
+                "(expected asio.h and iasiodrv.h)")
         endif()
     endif()
     target_compile_definitions(SatoriRealtimeWin PRIVATE SATORI_HAS_ASIO_SDK=${SATORI_HAS_ASIO_SDK})

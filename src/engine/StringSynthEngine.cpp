@@ -1,16 +1,34 @@
 #include "engine/StringSynthEngine.h"
 
+#include <array>
+#include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <iterator>
 #include <limits>
+#include <mutex>
+#include <thread>
 
 #include "dsp/Filter.h"
 #include "dsp/ConvolutionReverb.h"
+#include "dsp/Denormals.h"
 #include "dsp/PartitionedConvolver.h"
 #include "dsp/RoomIrLibrary.h"
 
 namespace engine {
+
+namespace {
+float Clamp01(float v) { return std::max(0.0f, std::min(1.0f, v)); }
+float ComputeOnePoleAlpha(double sampleRate, double timeSeconds) {
+    if (sampleRate <= 0.0 || timeSeconds <= 0.0) {
+        return 1.0f;
+    }
+    const double a = 1.0 - std::exp(-1.0 / (sampleRate * timeSeconds));
+    return static_cast<float>(std::clamp(a, 0.0, 1.0));
+}
+}  // namespace
 
 class BodyFilter {
 public:
@@ -91,36 +109,222 @@ public:
 
 class RoomProcessor {
 public:
+    RoomProcessor() { startWorker(); }
+
+    ~RoomProcessor() { stopWorker(); }
+
     void setSampleRate(double sampleRate) {
         if (sampleRate <= 0.0) {
             return;
         }
-        if (!kernels_.empty() && std::lround(sampleRate_) == std::lround(sampleRate)) {
+        const double rounded = std::lround(sampleRate);
+        const double prior = std::lround(requestedSampleRate_.load(std::memory_order_relaxed));
+        if (rounded == prior && builtOnce_.load(std::memory_order_acquire)) {
             return;
         }
-        sampleRate_ = sampleRate;
-        rebuildKernels();
-        reverb_.setSampleRate(sampleRate_);
-        reverb_.setIrKernels(kernels_);
+        requestedSampleRate_.store(sampleRate, std::memory_order_release);
+        mixSmoothingAlpha_ = ComputeOnePoleAlpha(sampleRate, 0.01);
+        sampleRateSeq_.fetch_add(1, std::memory_order_acq_rel);
+        dataReady_.notify_one();
     }
 
     void setMix(float mix) {
-        mix_ = std::clamp(mix, 0.0f, 1.0f);
-        reverb_.setMix(mix_);
+        requestedMix_.store(std::clamp(mix, 0.0f, 1.0f), std::memory_order_relaxed);
     }
 
     void setIrIndex(int index) {
-        irIndex_ = std::max(0, index);
-        reverb_.setIrIndex(irIndex_);
+        requestedIrIndex_.store(std::max(0, index), std::memory_order_relaxed);
     }
 
-    void reset() { reverb_.reset(); }
+    void reset() {
+        resetSeq_.fetch_add(1, std::memory_order_acq_rel);
+        // Clear local (audio-thread) state so old wet blocks don't leak through.
+        blockPos_ = 0;
+        haveWetBlock_ = false;
+        havePlayDryBlock_ = false;
+        haveOutputSeq_ = false;
+        bufferedWet_.reset();
+        for (auto& block : dryHistory_) {
+            block.seq = std::numeric_limits<std::uint64_t>::max();
+        }
+        syncReverb_.reset();
+        syncBuiltOnce_ = false;
+        currentMix_ = Clamp01(requestedMix_.load(std::memory_order_relaxed));
+        lastTargetMix_ = 0.0f;
+    }
 
     void process(float input, float& outL, float& outR) {
-        reverb_.processSample(input, outL, outR);
+        const float targetMix = Clamp01(requestedMix_.load(std::memory_order_relaxed));
+        currentMix_ += (targetMix - currentMix_) * mixSmoothingAlpha_;
+
+        float wetL = 0.0f;
+        float wetR = 0.0f;
+
+        if (useSynchronous_) {
+            syncProcess(input, wetL, wetR);  // wet-only
+            outL = input * (1.0f - currentMix_) + wetL * currentMix_;
+            outR = input * (1.0f - currentMix_) + wetR * currentMix_;
+            return;
+        }
+
+        if (targetMix <= 0.0f) {
+            if (lastTargetMix_ > 0.0f) {
+                resetSeq_.fetch_add(1, std::memory_order_acq_rel);
+                haveWetBlock_ = false;
+                havePlayDryBlock_ = false;
+                haveOutputSeq_ = false;
+                bufferedWet_.reset();
+                StereoBlock drained{};
+                while (wetQueue_.pop(drained)) {
+                }
+            }
+            lastTargetMix_ = targetMix;
+            outL = input;
+            outR = input;
+            return;
+        }
+
+        if (lastTargetMix_ <= 0.0f) {
+            // Freshly enabled: reset sequencing and clear any stale buffered blocks.
+            resetSeq_.fetch_add(1, std::memory_order_acq_rel);
+            nextSeq_ = 0;
+            outputSeq_ = 0;
+            haveOutputSeq_ = false;
+            haveWetBlock_ = false;
+            havePlayDryBlock_ = false;
+            bufferedWet_.reset();
+            for (auto& block : dryHistory_) {
+                block.seq = std::numeric_limits<std::uint64_t>::max();
+            }
+            StereoBlock drained{};
+            while (wetQueue_.pop(drained)) {
+            }
+        }
+        lastTargetMix_ = targetMix;
+
+        // Only swap wet blocks on boundaries to avoid mid-block discontinuities.
+        if (blockPos_ == 0) {
+            if (nextSeq_ >= kOutputDelayBlocks) {
+                outputSeq_ = nextSeq_ - kOutputDelayBlocks;
+                haveOutputSeq_ = true;
+                playDryBlock_ =
+                    dryHistory_[static_cast<std::size_t>(outputSeq_ & (kDryHistoryBlocks - 1))];
+                havePlayDryBlock_ = (playDryBlock_.seq == outputSeq_);
+            } else {
+                haveOutputSeq_ = false;
+                havePlayDryBlock_ = false;
+            }
+
+            const std::uint64_t expectedSeq =
+                havePlayDryBlock_ ? playDryBlock_.seq : std::numeric_limits<std::uint64_t>::max();
+            haveWetBlock_ = false;
+            if (expectedSeq == std::numeric_limits<std::uint64_t>::max()) {
+                // Not enough history yet; don't drain the queue.
+            } else if (bufferedWet_ && bufferedWet_->seq == expectedSeq) {
+                wetBlock_ = *bufferedWet_;
+                bufferedWet_.reset();
+                haveWetBlock_ = true;
+            } else {
+                StereoBlock candidate{};
+                while (wetQueue_.pop(candidate)) {
+                    if (candidate.seq < expectedSeq) {
+                        continue;
+                    }
+                    if (candidate.seq == expectedSeq) {
+                        wetBlock_ = candidate;
+                        haveWetBlock_ = true;
+                        break;
+                    }
+                    bufferedWet_ = candidate;
+                    break;
+                }
+            }
+        }
+        if (haveWetBlock_) {
+            wetL = wetBlock_.samples[blockPos_ * 2];
+            wetR = wetBlock_.samples[blockPos_ * 2 + 1];
+        }
+
+        const float dryOut =
+            havePlayDryBlock_ ? playDryBlock_.samples[blockPos_] : input;
+        outL = dryOut * (1.0f - currentMix_) + wetL * currentMix_;
+        outR = dryOut * (1.0f - currentMix_) + wetR * currentMix_;
+
+        // Input path: accumulate dry into fixed blocks and enqueue for worker.
+        dryAccum_.samples[blockPos_] = input;
+        ++blockPos_;
+        if (blockPos_ >= kBlockSize) {
+            dryAccum_.seq = nextSeq_++;
+            if (dryQueue_.push(dryAccum_)) {
+                pendingDryBlocks_.fetch_add(1, std::memory_order_release);
+                dataReady_.notify_one();
+            }
+            dryHistory_[static_cast<std::size_t>(dryAccum_.seq & (kDryHistoryBlocks - 1))] =
+                dryAccum_;
+            blockPos_ = 0;
+            updateOfflineDetection();
+        }
     }
 
 private:
+    static constexpr std::size_t kBlockSize = 256;
+    static constexpr std::size_t kFftSize = 512;
+    static constexpr std::size_t kLateBlockSize = 1024;
+    static constexpr std::size_t kLateFftSize = 2048;
+    static constexpr std::size_t kIrEarlySamples = kLateBlockSize;  // 1024
+    // Strategy A (fixed latency): delay output by a few blocks to absorb worker jitter
+    // and ensure wet blocks arrive in time.
+    static constexpr std::size_t kOutputDelayBlocks = 6;
+    static constexpr std::size_t kDryHistoryBlocks = 64;  // power-of-two
+    static constexpr std::size_t kQueueCapacity = 256;  // blocks (power-of-two)
+
+    template <typename T, std::size_t Capacity>
+    class SpscRing {
+    public:
+        static_assert(Capacity >= 2, "Capacity too small");
+        static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be power of two");
+
+        bool push(const T& value) {
+            const std::size_t head = head_.load(std::memory_order_relaxed);
+            const std::size_t tail = tail_.load(std::memory_order_acquire);
+            if ((head - tail) >= Capacity) {
+                return false;
+            }
+            buffer_[head & (Capacity - 1)] = value;
+            head_.store(head + 1, std::memory_order_release);
+            return true;
+        }
+
+        bool pop(T& out) {
+            const std::size_t tail = tail_.load(std::memory_order_relaxed);
+            const std::size_t head = head_.load(std::memory_order_acquire);
+            if (head == tail) {
+                return false;
+            }
+            out = buffer_[tail & (Capacity - 1)];
+            tail_.store(tail + 1, std::memory_order_release);
+            return true;
+        }
+
+    private:
+        std::array<T, Capacity> buffer_{};
+        std::atomic<std::size_t> head_{0};
+        std::atomic<std::size_t> tail_{0};
+    };
+
+    struct DryBlock {
+        std::uint64_t seq = 0;
+        std::array<float, kBlockSize> samples{};
+    };
+
+    struct StereoBlock {
+        std::uint64_t seq = 0;
+        std::array<float, kBlockSize * 2> samples{};
+    };
+
+    static_assert(kOutputDelayBlocks < kDryHistoryBlocks,
+                  "Output delay must fit in dry history");
+
     static std::vector<float> ResampleLinear(const float* src,
                                              std::size_t srcCount,
                                              int srcRate,
@@ -147,20 +351,21 @@ private:
         return dst;
     }
 
-    void rebuildKernels() {
-        kernels_.clear();
+    void rebuildKernels(double sampleRate,
+                        std::vector<dsp::StereoConvolutionKernel>& kernelsOut) {
+        kernelsOut.clear();
         const auto& list = dsp::RoomIrLibrary::list();
-        kernels_.reserve(list.size());
+        kernelsOut.reserve(list.size());
 
         for (std::size_t i = 0; i < list.size(); ++i) {
             const auto ir = dsp::RoomIrLibrary::samples(static_cast<int>(i));
             const bool stereo = (ir.channels == 2 && ir.right);
             std::vector<float> resampledL = ResampleLinear(ir.left, ir.frameCount, ir.sampleRate,
-                                                          static_cast<int>(std::lround(sampleRate_)));
+                                                          static_cast<int>(std::lround(sampleRate)));
             std::vector<float> resampledR;
             if (stereo) {
                 resampledR = ResampleLinear(ir.right, ir.frameCount, ir.sampleRate,
-                                            static_cast<int>(std::lround(sampleRate_)));
+                                            static_cast<int>(std::lround(sampleRate)));
             }
             if (stereo && resampledR.size() != resampledL.size()) {
                 const std::size_t n = std::min(resampledL.size(), resampledR.size());
@@ -192,24 +397,236 @@ private:
             }
 
             dsp::StereoConvolutionKernel kernel;
+            const std::size_t earlyCount = std::min(kIrEarlySamples, resampledL.size());
+            std::vector<float> earlyL(resampledL.begin(), resampledL.begin() + static_cast<std::ptrdiff_t>(earlyCount));
             kernel.left = dsp::PartitionedConvolver::buildKernelFromIr(
-                resampledL, reverbBlockSize_, reverbFftSize_);
+                earlyL, kBlockSize, kFftSize);
+            if (resampledL.size() > earlyCount) {
+                std::vector<float> lateL(resampledL.begin() + static_cast<std::ptrdiff_t>(earlyCount), resampledL.end());
+                kernel.leftLate = dsp::PartitionedConvolver::buildKernelFromIr(
+                    lateL, kLateBlockSize, kLateFftSize);
+                kernel.hasLate = !kernel.leftLate.partitions.empty();
+            }
             if (stereo && !treatStereoAsMono) {
+                const std::size_t earlyCountR = std::min(kIrEarlySamples, resampledR.size());
+                std::vector<float> earlyR(resampledR.begin(), resampledR.begin() + static_cast<std::ptrdiff_t>(earlyCountR));
                 kernel.right = dsp::PartitionedConvolver::buildKernelFromIr(
-                    resampledR, reverbBlockSize_, reverbFftSize_);
+                    earlyR, kBlockSize, kFftSize);
+                if (resampledR.size() > earlyCountR) {
+                    std::vector<float> lateR(resampledR.begin() + static_cast<std::ptrdiff_t>(earlyCountR), resampledR.end());
+                    kernel.rightLate = dsp::PartitionedConvolver::buildKernelFromIr(
+                        lateR, kLateBlockSize, kLateFftSize);
+                    kernel.hasLate = kernel.hasLate || !kernel.rightLate.partitions.empty();
+                }
                 kernel.isStereo = true;
             }
-            kernels_.push_back(std::move(kernel));
+            kernelsOut.push_back(std::move(kernel));
         }
     }
 
-    double sampleRate_ = 44100.0;
-    float mix_ = 0.0f;
-    int irIndex_ = 0;
+    void updateOfflineDetection() {
+        if (offlineDetected_) {
+            useSynchronous_ = true;
+            return;
+        }
 
-    // Keep consistent with dsp::ConvolutionReverb defaults.
-    std::size_t reverbBlockSize_ = 256;
-    std::size_t reverbFftSize_ = 512;
+        processedFramesForTiming_ += kBlockSize;
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed = now - timingStart_;
+        const auto elapsedSeconds =
+            std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
+        if (elapsedSeconds <= 0.0) {
+            return;
+        }
+        const double framesPerSecond =
+            static_cast<double>(processedFramesForTiming_) / elapsedSeconds;
+        const double sr =
+            std::max(1.0, requestedSampleRate_.load(std::memory_order_relaxed));
+        const double speedRatio = framesPerSecond / sr;
+        if (speedRatio > 8.0) {
+            ++fastBlockStreak_;
+        } else {
+            fastBlockStreak_ = 0;
+        }
+        if (fastBlockStreak_ >= 2) {
+            offlineDetected_ = true;
+            useSynchronous_ = true;
+        }
+    }
+
+    void syncApplyPendingState() {
+        const std::uint64_t srSeq = sampleRateSeq_.load(std::memory_order_acquire);
+        if (srSeq != syncSampleRateSeq_) {
+            const double requested = requestedSampleRate_.load(std::memory_order_acquire);
+            if (requested > 0.0) {
+                syncSampleRate_ = requested;
+                rebuildKernels(syncSampleRate_, syncKernels_);
+                syncReverb_.setMix(1.0f);  // wet-only; mix is applied on the audio thread.
+                syncReverb_.setSampleRate(syncSampleRate_);
+                syncReverb_.setIrKernels(syncKernels_);
+                syncBuiltOnce_ = true;
+                builtOnce_.store(true, std::memory_order_release);
+            }
+            syncSampleRateSeq_ = srSeq;
+            syncIrIndex_ = -1;
+        }
+
+        const std::uint64_t rstSeq = resetSeq_.load(std::memory_order_acquire);
+        if (rstSeq != syncResetSeq_) {
+            syncReverb_.reset();
+            syncResetSeq_ = rstSeq;
+            syncIrIndex_ = -1;
+        }
+        const int irIndex = requestedIrIndex_.load(std::memory_order_relaxed);
+        if (irIndex != syncIrIndex_) {
+            syncReverb_.setIrIndex(irIndex);
+            syncIrIndex_ = irIndex;
+        }
+    }
+
+    void syncProcess(float input, float& outL, float& outR) {
+        syncApplyPendingState();
+        // Output wet-only; dry/mix is applied by the caller.
+        syncReverb_.processSample(input, outL, outR);
+    }
+
+    void startWorker() {
+        if (running_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        worker_ = std::thread(&RoomProcessor::workerLoop, this);
+    }
+
+    void stopWorker() {
+        if (!running_.exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
+        dataReady_.notify_one();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    void workerLoop() {
+        dsp::ScopedDenormalsDisable denormalsGuard;
+
+        double currentSampleRate = 44100.0;
+        std::uint64_t currentSampleRateSeq = 0;
+        std::uint64_t currentResetSeq = 0;
+        int currentIrIndex = -1;
+
+        // Worker produces wet-only blocks.
+        reverb_.setMix(1.0f);
+
+        auto applyPendingState = [&] {
+            const std::uint64_t srSeq = sampleRateSeq_.load(std::memory_order_acquire);
+            if (srSeq != currentSampleRateSeq) {
+                const double requested =
+                    requestedSampleRate_.load(std::memory_order_acquire);
+                if (requested > 0.0) {
+                    currentSampleRate = requested;
+                    rebuildKernels(currentSampleRate, kernels_);
+                    reverb_.setMix(1.0f);
+                    reverb_.setSampleRate(currentSampleRate);
+                    reverb_.setIrKernels(kernels_);
+                    builtOnce_.store(true, std::memory_order_release);
+                }
+                currentSampleRateSeq = srSeq;
+                // Force re-apply for the new instance/state.
+                currentIrIndex = -1;
+            }
+
+            const std::uint64_t rstSeq = resetSeq_.load(std::memory_order_acquire);
+            if (rstSeq != currentResetSeq) {
+                reverb_.reset();
+                currentResetSeq = rstSeq;
+                // Re-apply params after reset.
+                currentIrIndex = -1;
+            }
+            const int irIndex = requestedIrIndex_.load(std::memory_order_relaxed);
+            if (irIndex != currentIrIndex) {
+                reverb_.setIrIndex(irIndex);
+                currentIrIndex = irIndex;
+            }
+        };
+
+        DryBlock dry{};
+        std::array<float, kBlockSize> wetL{};
+        std::array<float, kBlockSize> wetR{};
+        while (running_.load(std::memory_order_acquire)) {
+            if (!dryQueue_.pop(dry)) {
+                std::unique_lock<std::mutex> lock(cvMutex_);
+                dataReady_.wait(lock, [&] {
+                    return !running_.load(std::memory_order_acquire) ||
+                           pendingDryBlocks_.load(std::memory_order_acquire) > 0;
+                });
+                continue;
+            }
+            pendingDryBlocks_.fetch_sub(1, std::memory_order_acq_rel);
+
+            applyPendingState();
+
+            StereoBlock wet{};
+            wet.seq = dry.seq;
+            reverb_.processBlockWet(dry.samples.data(), wetL.data(), wetR.data());
+            for (std::size_t i = 0; i < kBlockSize; ++i) {
+                wet.samples[i * 2] = wetL[i];
+                wet.samples[i * 2 + 1] = wetR[i];
+            }
+            (void)wetQueue_.push(wet);
+        }
+    }
+
+    // Audio-thread state.
+    DryBlock dryAccum_{};
+    std::size_t blockPos_ = 0;
+    StereoBlock wetBlock_{};
+    bool haveWetBlock_ = false;
+    DryBlock playDryBlock_{};
+    bool havePlayDryBlock_ = false;
+    std::array<DryBlock, kDryHistoryBlocks> dryHistory_{};
+    std::uint64_t outputSeq_ = 0;
+    bool haveOutputSeq_ = false;
+    std::optional<StereoBlock> bufferedWet_{};
+    std::uint64_t nextSeq_ = 0;
+    float mixSmoothingAlpha_ = 1.0f;
+    float currentMix_ = 0.0f;
+    float lastTargetMix_ = 0.0f;
+
+    // Auto-detect offline rendering (e.g. unit tests) and fall back to synchronous
+    // processing so the DSP remains deterministic when processed faster than realtime.
+    bool offlineDetected_ = false;
+    bool useSynchronous_ = false;
+    std::chrono::steady_clock::time_point timingStart_ = std::chrono::steady_clock::now();
+    std::size_t processedFramesForTiming_ = 0;
+    int fastBlockStreak_ = 0;
+
+    // Synchronous fallback state (audio thread).
+    bool syncBuiltOnce_ = false;
+    double syncSampleRate_ = 44100.0;
+    std::uint64_t syncSampleRateSeq_ = 0;
+    std::uint64_t syncResetSeq_ = 0;
+    int syncIrIndex_ = -1;
+    std::vector<dsp::StereoConvolutionKernel> syncKernels_{};
+    dsp::ConvolutionReverb syncReverb_{};
+
+    // Cross-thread queues (audio thread <-> reverb worker).
+    SpscRing<DryBlock, kQueueCapacity> dryQueue_{};
+    SpscRing<StereoBlock, kQueueCapacity> wetQueue_{};
+
+    std::atomic<bool> running_{false};
+    std::thread worker_{};
+    std::condition_variable dataReady_{};
+    std::mutex cvMutex_{};
+    std::atomic<std::uint32_t> pendingDryBlocks_{0};
+
+    // Control parameters set from any thread; applied on worker thread.
+    std::atomic<double> requestedSampleRate_{44100.0};
+    std::atomic<std::uint64_t> sampleRateSeq_{0};
+    std::atomic<float> requestedMix_{0.0f};
+    std::atomic<int> requestedIrIndex_{0};
+    std::atomic<std::uint64_t> resetSeq_{0};
+    std::atomic<bool> builtOnce_{false};
 
     std::vector<dsp::StereoConvolutionKernel> kernels_;
     dsp::ConvolutionReverb reverb_;
