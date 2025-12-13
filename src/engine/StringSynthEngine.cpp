@@ -147,6 +147,75 @@ private:
         return dst;
     }
 
+    static void TrimIrTailByEnergy(std::vector<float>& left,
+                                   std::vector<float>* right,
+                                   std::size_t minFrames,
+                                   double maxTrimEnergyFraction) {
+        if (left.empty() || maxTrimEnergyFraction <= 0.0) {
+            return;
+        }
+
+        std::size_t frames = left.size();
+        const bool stereo = (right != nullptr && !right->empty());
+        if (stereo) {
+            frames = std::min(frames, right->size());
+            left.resize(frames);
+            right->resize(frames);
+        }
+
+        minFrames = std::min(minFrames, frames);
+        if (frames <= minFrames + 1) {
+            return;
+        }
+
+        double totalEnergy = 0.0;
+        if (!stereo) {
+            for (std::size_t i = 0; i < frames; ++i) {
+                const double v = static_cast<double>(left[i]);
+                totalEnergy += v * v;
+            }
+        } else {
+            for (std::size_t i = 0; i < frames; ++i) {
+                const double l = static_cast<double>(left[i]);
+                const double r = static_cast<double>((*right)[i]);
+                totalEnergy += l * l + r * r;
+            }
+        }
+
+        if (!(totalEnergy > std::numeric_limits<double>::min())) {
+            return;
+        }
+
+        const double maxTrimEnergy = totalEnergy * maxTrimEnergyFraction;
+        double trimmedEnergy = 0.0;
+        std::size_t cut = frames;
+        for (std::size_t i = frames; i > minFrames; --i) {
+            const std::size_t idx = i - 1;
+            double e = 0.0;
+            if (!stereo) {
+                const double v = static_cast<double>(left[idx]);
+                e = v * v;
+            } else {
+                const double l = static_cast<double>(left[idx]);
+                const double r = static_cast<double>((*right)[idx]);
+                e = l * l + r * r;
+            }
+            if (trimmedEnergy + e > maxTrimEnergy) {
+                cut = i;
+                break;
+            }
+            trimmedEnergy += e;
+        }
+
+        cut = std::max<std::size_t>(cut, 1);
+        if (cut < frames) {
+            left.resize(cut);
+            if (stereo) {
+                right->resize(cut);
+            }
+        }
+    }
+
     void rebuildKernels() {
         kernels_.clear();
         const auto& list = dsp::RoomIrLibrary::list();
@@ -170,11 +239,50 @@ private:
             if (stereo && resampledR.size() > maxLen) {
                 resampledR.resize(maxLen);
             }
+            if (stereo && resampledR.size() != resampledL.size()) {
+                const std::size_t n = std::min(resampledL.size(), resampledR.size());
+                resampledL.resize(n);
+                resampledR.resize(n);
+            }
+
+            // Long IR tails can exceed real-time CPU budgets. Trim only the very
+            // low-energy tail portion (preserves early reflections and most energy).
+            const std::size_t minKeep =
+                std::max<std::size_t>(reverbBlockSize_ * 2,
+                                      static_cast<std::size_t>(std::lround(sampleRate_ * 0.20))); // >= 200ms
+            constexpr double kMaxTrimEnergyFraction = 1e-4;  // allow trimming last 0.01% energy
+            TrimIrTailByEnergy(resampledL,
+                               stereo ? &resampledR : nullptr,
+                               minKeep,
+                               kMaxTrimEnergyFraction);
+
+            bool treatStereoAsMono = false;
+            if (stereo && !resampledR.empty()) {
+                // Some "stereo" IRs are dual-mono (L==R). In that case, treat it as mono
+                // to keep the classic stereo decorrelation path and cut CPU in half.
+                const std::size_t frames = std::min(resampledL.size(), resampledR.size());
+                double energy = 0.0;
+                double diffEnergy = 0.0;
+                for (std::size_t f = 0; f < frames; ++f) {
+                    const double l = static_cast<double>(resampledL[f]);
+                    const double r = static_cast<double>(resampledR[f]);
+                    energy += 0.5 * (l * l + r * r);
+                    const double d = l - r;
+                    diffEnergy += d * d;
+                }
+                if (energy <= std::numeric_limits<double>::min()) {
+                    treatStereoAsMono = true;
+                } else {
+                    const double rms = std::sqrt(energy / static_cast<double>(frames));
+                    const double diffRms = std::sqrt(diffEnergy / static_cast<double>(frames));
+                    treatStereoAsMono = (diffRms / std::max(1e-12, rms)) < 1e-3;  // ~ -60dB
+                }
+            }
 
             dsp::StereoConvolutionKernel kernel;
             kernel.left = dsp::PartitionedConvolver::buildKernelFromIr(
                 resampledL, reverbBlockSize_, reverbFftSize_);
-            if (stereo) {
+            if (stereo && !treatStereoAsMono) {
                 kernel.right = dsp::PartitionedConvolver::buildKernelFromIr(
                     resampledR, reverbBlockSize_, reverbFftSize_);
                 kernel.isStereo = true;

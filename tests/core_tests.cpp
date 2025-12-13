@@ -296,21 +296,48 @@ TEST_CASE("Room 模块提供可控的立体扩展", "[engine-room]") {
     const auto energyEnd = toFrames(0.25);
     const float dryEnergy = stereoRms(dry, energyStart, energyEnd);
     const float wetEnergy = stereoRms(wet, energyStart, energyEnd);
+    auto stereoSideRms = [](const std::vector<float>& buffer, std::size_t startFrame,
+                            std::size_t endFrame) {
+        if (buffer.size() < 2) {
+            return 0.0f;
+        }
+        const std::size_t totalFrames = buffer.size() / 2;
+        const std::size_t clampedEnd = std::min(endFrame, totalFrames);
+        double sum = 0.0;
+        std::size_t count = 0;
+        for (std::size_t frame = startFrame; frame < clampedEnd; ++frame) {
+            const std::size_t idx = frame * 2;
+            if (idx + 1 >= buffer.size()) {
+                break;
+            }
+            const double side = static_cast<double>(buffer[idx] - buffer[idx + 1]);
+            sum += side * side;
+            ++count;
+        }
+        if (count == 0) {
+            return 0.0f;
+        }
+        return static_cast<float>(std::sqrt(sum / static_cast<double>(count)));
+    };
+    const float wetSide = stereoSideRms(wet, energyStart, energyEnd);
 
     REQUIRE(dryEnergy > 0.0f);
     REQUIRE(wetEnergy > 0.0f);
     // Wet energy should stay in the same order of magnitude as dry.
     REQUIRE(wetEnergy < dryEnergy * 6.0f);
     REQUIRE(wetEnergy > dryEnergy * 0.1f);
+    // Stereo width should be present in the wet signal.
+    REQUIRE(wetSide > wetEnergy * 0.01f);
 
-    const float leftPeak = maxAbs(wet);
+    float leftPeak = 0.0f;
     float rightPeak = 0.0f;
-    for (std::size_t i = 1; i < wet.size(); i += 2) {
-        rightPeak = std::max(rightPeak, std::abs(wet[i]));
+    for (std::size_t frame = 0; frame + 1 < wet.size() / 2; ++frame) {
+        const std::size_t idx = frame * 2;
+        leftPeak = std::max(leftPeak, std::abs(wet[idx]));
+        rightPeak = std::max(rightPeak, std::abs(wet[idx + 1]));
     }
     REQUIRE(leftPeak > 0.001f);
     REQUIRE(rightPeak > 0.001f);
-    REQUIRE(std::abs(leftPeak - rightPeak) > 1e-4f);
 }
 
 TEST_CASE("StringSynthEngine NoteOn/Off 控制尾音长度", "[engine-core]") {

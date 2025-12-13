@@ -6,6 +6,8 @@
 #include <sstream>
 #include <thread>
 
+#include "dsp/Denormals.h"
+
 namespace winaudio {
 
 namespace {
@@ -237,6 +239,9 @@ bool WASAPIAudioEngine::configureEngine(RenderCallback callback) {
 void WASAPIAudioEngine::renderLoop() {
     const HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool comInitialized = SUCCEEDED(initHr);
+
+    // Prevent denormal-induced CPU spikes in long decays (e.g. convolution IR tails).
+    dsp::ScopedDenormalsDisable denormalsGuard;
 
     HRESULT hr = audioClient_->Start();
     if (FAILED(hr)) {
