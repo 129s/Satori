@@ -397,7 +397,8 @@ void ParameterKnob::drawTooltip(ID2D1HwndRenderTarget* target,
                                 ID2D1SolidColorBrush* textBrush,
                                 IDWriteTextFormat* textFormat) const {
     (void)fillBrush;
-    if (!dragging_ || !target || !baseBrush || !textBrush || !textFormat) {
+    if ((!dragging_ && !hovered_) || !target || !baseBrush || !textBrush ||
+        !textFormat) {
         return;
     }
 
@@ -447,7 +448,7 @@ void ParameterKnob::drawTooltip(ID2D1HwndRenderTarget* target,
     const float valueWMax = std::max(w100, std::max(w88, w0));
 
     const float knobWidth = layout.outerRadius * 2.0f;
-    const float tooltipMaxWidth = knobWidth * 2.0f;
+    const float tooltipMaxWidth = std::max(knobWidth * 3.0f, 360.0f);
     const float innerPadX = std::clamp(lhH * 0.22f, 4.0f, 10.0f);
     const float colGap = innerPadX;  // 列间中缝
 
@@ -460,12 +461,43 @@ void ParameterKnob::drawTooltip(ID2D1HwndRenderTarget* target,
                    1.0f;  // 向上取整并+1px保险，避免早截断
 
     const float innerPadY = std::clamp(lhH * 0.18f, 3.0f, 12.0f);
-    const float tooltipHeight =
-        layout.labelHeight + innerPadY * 2.0f;  // 含上下内边距
+
+    const float minRight = valueWMax + innerPadX * 2.0f + epsilon;
+    const float minTooltipWidth =
+        minRight + colGap + innerPadX * 2.0f + epsilon;
+    tooltipWidth = std::max(tooltipWidth, minTooltipWidth);
+
+    const float rightWidth = minRight;
+    const float leftWidth = std::max(0.0f, tooltipWidth - (colGap + rightWidth));
+    const float leftTextWidth = std::max(0.0f, leftWidth - innerPadX * 2.0f);
+
+    ComPtr<IDWriteTextLayout> wrappedLabelLayout;
+    DWRITE_TEXT_METRICS wrappedLabelMetrics{};
+    float wrappedLabelHeight = 0.0f;
+    if (auto f = GetLocalDWriteFactory(); f && leftTextWidth > 1.0f) {
+        if (SUCCEEDED(f->CreateTextLayout(
+                label_.c_str(), static_cast<UINT32>(label_.size()), textFormat,
+                leftTextWidth, 10000.0f, &wrappedLabelLayout)) &&
+            wrappedLabelLayout) {
+            wrappedLabelLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            DWRITE_TRIMMING trimming{};
+            trimming.granularity = DWRITE_TRIMMING_GRANULARITY_NONE;
+            wrappedLabelLayout->SetTrimming(&trimming, nullptr);
+            if (SUCCEEDED(wrappedLabelLayout->GetMetrics(&wrappedLabelMetrics))) {
+                wrappedLabelHeight = wrappedLabelMetrics.height;
+            }
+        }
+    }
+
+    float tooltipContentHeight = std::max(layout.labelHeight, lhH);
+    if (wrappedLabelHeight > 0.0f) {
+        tooltipContentHeight = std::max(tooltipContentHeight, wrappedLabelHeight);
+    }
+    const float tooltipHeight = tooltipContentHeight + innerPadY * 2.0f;
 
     const float tooltipLeft = layout.center.x - tooltipWidth * 0.5f;
     const float tooltipTop =
-        layout.labelOuterRect.bottom + std::clamp(lhH * 0.18f, 3.0f, 12.0f);
+        layout.center.y - layout.outerRadius - tooltipHeight - 6.0f;
     const auto tooltipRect = D2D1::RectF(
         tooltipLeft, tooltipTop, tooltipLeft + tooltipWidth,
         tooltipTop + tooltipHeight);
@@ -490,21 +522,21 @@ void ParameterKnob::drawTooltip(ID2D1HwndRenderTarget* target,
         target->FillRoundedRectangle(bubble, baseBrush);
     }
 
-    const float minLeft = labelW + innerPadX * 2.0f + epsilon;
-    const float minRight = valueWMax + innerPadX * 2.0f + epsilon;
-    float leftWidth = std::max(minLeft, tooltipWidth - (colGap + minRight));
-    float rightWidth = tooltipWidth - colGap - leftWidth;
-    if (rightWidth < minRight) {
-        rightWidth = minRight;
-        leftWidth = std::max(minLeft, tooltipWidth - (colGap + rightWidth));
-    }
-
     const auto leftRect = D2D1::RectF(
         tooltipRect.left + innerPadX, tooltipRect.top + innerPadY,
         tooltipRect.left + leftWidth - innerPadX,
         tooltipRect.bottom - innerPadY);
-    target->DrawText(label_.c_str(), static_cast<UINT32>(label_.size()),
-                     textFormat, leftRect, textBrush);
+    if (wrappedLabelLayout && wrappedLabelHeight > 0.0f) {
+        const float availableH = std::max(0.0f, leftRect.bottom - leftRect.top);
+        const float offsetY =
+            std::max(0.0f, (availableH - wrappedLabelMetrics.height) * 0.5f);
+        target->DrawTextLayout(
+            D2D1::Point2F(leftRect.left, leftRect.top + offsetY),
+            wrappedLabelLayout.Get(), textBrush);
+    } else {
+        target->DrawText(label_.c_str(), static_cast<UINT32>(label_.size()),
+                         textFormat, leftRect, textBrush);
+    }
 
     const auto rightRect = D2D1::RectF(
         leftRect.right + colGap, tooltipRect.top + innerPadY,

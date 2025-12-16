@@ -69,17 +69,24 @@ void UIStackPanel::arrange(const D2D1_RECT_F& bounds) {
     float availableForAuto = remaining;
 
     std::vector<float> autoHeights;
+    std::vector<float> autoFlexWeights;
     autoHeights.reserve(items_.size());
+    autoFlexWeights.reserve(items_.size());
 
     float autoDesired = 0.0f;
+    float flexSum = 0.0f;
     for (const auto& item : items_) {
         if (item.size.mode == UISizeMode::kAuto && item.node) {
             const float desired =
                 std::max(item.node->preferredHeight(width), item.size.minHeight);
             autoHeights.push_back(desired);
             autoDesired += desired;
+            const float weight = std::max(0.0f, item.size.value);
+            autoFlexWeights.push_back(weight);
+            flexSum += weight;
         } else {
             autoHeights.push_back(0.0f);
+            autoFlexWeights.push_back(0.0f);
         }
     }
 
@@ -87,6 +94,26 @@ void UIStackPanel::arrange(const D2D1_RECT_F& bounds) {
     if (autoDesired > 0.0f && availableForAuto > 0.0f &&
         autoDesired > availableForAuto) {
         scale = availableForAuto / autoDesired;
+    }
+
+    std::vector<float> allocatedAutoHeights;
+    allocatedAutoHeights.resize(items_.size(), 0.0f);
+    float allocatedAutoTotal = 0.0f;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+        allocatedAutoHeights[i] = autoHeights[i] * scale;
+        allocatedAutoTotal += allocatedAutoHeights[i];
+    }
+
+    // When the container is taller than the sum of preferred heights, distribute
+    // the extra space to auto items that opt in via a positive flex weight.
+    if (flexSum > 0.0f && availableForAuto > allocatedAutoTotal) {
+        const float extra = availableForAuto - allocatedAutoTotal;
+        for (std::size_t i = 0; i < items_.size(); ++i) {
+            const float weight = autoFlexWeights[i];
+            if (weight > 0.0f) {
+                allocatedAutoHeights[i] += extra * (weight / flexSum);
+            }
+        }
     }
 
     for (std::size_t i = 0; i < items_.size(); ++i) {
@@ -101,7 +128,7 @@ void UIStackPanel::arrange(const D2D1_RECT_F& bounds) {
                 break;
             case UISizeMode::kAuto:
             default:
-                childHeight = autoHeights[i] * scale;
+                childHeight = allocatedAutoHeights[i];
                 childHeight =
                     std::max(item.size.minHeight, std::min(childHeight, remaining));
                 break;

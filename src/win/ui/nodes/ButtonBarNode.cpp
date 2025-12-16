@@ -9,6 +9,9 @@ namespace winui {
 ButtonBarNode::ButtonBarNode() = default;
 
 void ButtonBarNode::setButtons(std::vector<ButtonDescriptor> buttons) {
+    // Buttons are rebuilt from descriptors; discard any in-flight interaction
+    // state to avoid keeping dangling pointers across UI refreshes.
+    active_ = nullptr;
     buttons_.clear();
     buttons_.reserve(buttons.size());
     for (auto& desc : buttons) {

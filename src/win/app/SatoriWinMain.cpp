@@ -1,13 +1,16 @@
 #include <windows.h>
 #include <windowsx.h>
+#include <commdlg.h>
 
 #include <cmath>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cwchar>
 #include <cstdint>
 #include <filesystem>
+#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,6 +21,7 @@
 #include <vector>
 
 #include "synthesis/KarplusStrongString.h"
+#include "midi/MidiNoteLoader.h"
 #include "win/app/PresetManager.h"
 #include "win/audio/SatoriRealtimeEngine.h"
 #include "win/audio/UnifiedAudioEngine.h"
@@ -31,6 +35,7 @@ namespace {
 const wchar_t kWindowClassName[] = L"SatoriWinClass";
 const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
 constexpr UINT kMsgPreviewReady = WM_APP + 1;
+constexpr UINT kMsgMidiPlaybackFinished = WM_APP + 2;
 
 // 推荐窗口客户端区域尺寸（也是本迭代的最小可用尺寸）
 constexpr int kMinClientWidth = 1280;
@@ -132,6 +137,7 @@ public:
     void onPaint();
     void onTimer(UINT_PTR timerId);
     void onPreviewReady(PreviewPayload* payload);
+    void onMidiPlaybackCompleted(bool aborted);
     bool onKeyDown(UINT vk, LPARAM lparam);
     bool onKeyUp(UINT vk);
     bool onPointerDown(float x, float y);
@@ -164,6 +170,16 @@ private:
     void initializePresetSupport();
     void handleLoadPreset();
     void handleSavePreset();
+    void handleLoadMidiFile();
+    void toggleMidiPlayback();
+    bool browseForMidiFile(std::filesystem::path& outPath);
+    bool loadMidiFromPath(const std::filesystem::path& path);
+    void startMidiPlayback();
+    void stopMidiPlayback();
+    void runMidiPlayback(std::vector<midi::MidiNoteEvent> notes);
+    void updateMidiStatus();
+    void sendAllNotesOff();
+    void finalizeMidiPlayback(bool aborted);
     bool handleMidiKeyDown(UINT vk, LPARAM lparam);
     bool handleMidiKeyUp(UINT vk);
     void releaseAllVirtualKeys();
@@ -184,6 +200,7 @@ private:
     bool audioReady_ = false;
     std::wstring audioStatus_ = L"音频：未初始化";
     std::wstring presetStatus_ = L"预设：默认";
+    std::wstring midiStatus_;
     std::vector<float> waveformSamples_;
     std::vector<float> excitationSamples_;
     std::vector<float> roomIrPreviewSamples_;
@@ -195,8 +212,17 @@ private:
 #endif
     std::unordered_map<UINT, int> virtualKeyToMidi_;
     std::unordered_map<UINT, int> activeVirtualKeys_;
+    std::vector<midi::MidiNoteEvent> midiNotes_;
+    double midiDurationSeconds_ = 0.0;
+    std::filesystem::path midiFilePath_;
+    std::thread midiPlaybackThread_;
+    std::atomic<bool> midiPlaybackActive_{false};
+    std::atomic<bool> midiStopRequested_{false};
+    std::chrono::steady_clock::time_point midiPlaybackStart_;
+    bool midiHoldStatus_ = false;
 
     static constexpr UINT_PTR kWaveformPreviewTimerId = 1;
+    static constexpr UINT_PTR kMidiStatusTimerId = 2;
 
     std::mutex previewMutex_;
     std::condition_variable previewCv_;
@@ -240,6 +266,7 @@ bool SatoriAppState::initialize(HWND hwnd) {
 }
 
 void SatoriAppState::shutdown() {
+    stopMidiPlayback();
     stopPreviewWorker();
     if (engine_) {
         engine_->stop();
@@ -281,10 +308,27 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.mode = uiMode_;
     model.status.primary = audioStatus_;
     model.status.secondary = presetStatus_;
+    if (!midiStatus_.empty()) {
+        if (!model.status.secondary.empty()) {
+            model.status.secondary += L" | ";
+        }
+        model.status.secondary += midiStatus_;
+    }
     model.waveformSamples = waveformSamples_;
     model.audioOnline = audioReady_;
     model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
     model.diagram = buildDiagramState();
+
+    model.buttons.clear();
+    model.buttons.push_back(
+        winui::ButtonDescriptor{L"加载 MIDI", [this]() { handleLoadMidiFile(); }});
+    if (!midiNotes_.empty()) {
+        const bool playing = midiPlaybackActive_.load(std::memory_order_relaxed);
+        const std::wstring label = playing ? L"停止 MIDI" : L"播放 MIDI";
+
+        model.buttons.push_back(
+            winui::ButtonDescriptor{label, [this]() { toggleMidiPlayback(); }});
+    }
 
     auto findIndexU32 = [](const std::vector<std::uint32_t>& list, std::uint32_t value) {
         const auto it = std::find(list.begin(), list.end(), value);
@@ -365,7 +409,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
         }
     };
 
-    model.headerBar.bufferFrames.label = L"BufferFrames";
+    model.headerBar.bufferFrames.label = L"BufferSize";
     model.headerBar.bufferFrames.pageSize = 8;
     model.headerBar.bufferFrames.items.clear();
     model.headerBar.bufferFrames.items.reserve(audioBufferFramesOptions_.size());
@@ -441,17 +485,6 @@ winui::UIModel SatoriAppState::buildUIModel() {
                   },
                   winui::FlowModule::kExcitation, true));
     excitation.params.push_back(
-        makeParam(L"Mix", 0.0f, 1.0f,
-                  [this]() { return synthConfig_.excitationMix; },
-                  [this](float value) {
-                      synthConfig_.excitationMix = value;
-                      if (engine_) {
-                          engine_->setParam(engine::ParamId::ExcitationMix, value);
-                      }
-                      scheduleWaveformPreview(lastAuditionFrequency_);
-                  },
-                  winui::FlowModule::kExcitation, true));
-    excitation.params.push_back(
         makeParam(L"Vel. Sens", 0.0f, 1.0f,
                   [this]() { return synthConfig_.excitationVelocity; },
                    [this](float value) {
@@ -462,6 +495,17 @@ winui::UIModel SatoriAppState::buildUIModel() {
                        scheduleWaveformPreview(lastAuditionFrequency_);
                    },
                    winui::FlowModule::kExcitation, true));
+    excitation.params.push_back(
+        makeParam(L"Mix", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.excitationMix; },
+                  [this](float value) {
+                      synthConfig_.excitationMix = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::ExcitationMix, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
     excitation.params.push_back(
         makeParam(L"Position", 0.05f, 0.95f,
                   [this]() { return synthConfig_.pickPosition; },
@@ -800,13 +844,17 @@ void SatoriAppState::handleVirtualKeyEvent(int midiNote, double frequency,
 }
 
 void SatoriAppState::onTimer(UINT_PTR timerId) {
-    if (timerId != kWaveformPreviewTimerId) {
+    if (timerId == kWaveformPreviewTimerId) {
+        if (window_) {
+            KillTimer(window_, kWaveformPreviewTimerId);
+        }
+        refreshWaveformPreview(pendingPreviewFrequency_);
         return;
     }
-    if (window_) {
-        KillTimer(window_, kWaveformPreviewTimerId);
+    if (timerId == kMidiStatusTimerId) {
+        updateMidiStatus();
+        return;
     }
-    refreshWaveformPreview(pendingPreviewFrequency_);
 }
 
 void SatoriAppState::startPreviewWorker() {
@@ -964,6 +1012,247 @@ void SatoriAppState::handleSavePreset() {
         return;
     }
     updatePresetStatus(L"预设：已保存到 " + path.filename().wstring());
+}
+
+void SatoriAppState::handleLoadMidiFile() {
+    if (!window_) {
+        return;
+    }
+    std::filesystem::path path;
+    if (!browseForMidiFile(path)) {
+        return;
+    }
+    (void)loadMidiFromPath(path);
+}
+
+bool SatoriAppState::browseForMidiFile(std::filesystem::path& outPath) {
+    wchar_t buffer[MAX_PATH] = L"";
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = window_;
+    ofn.lpstrFilter =
+        L"MIDI 文件 (*.mid;*.midi)\0*.mid;*.midi\0所有文件 (*.*)\0*.*\0";
+    ofn.lpstrFile = buffer;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) {
+        return false;
+    }
+    outPath = buffer;
+    return true;
+}
+
+bool SatoriAppState::loadMidiFromPath(const std::filesystem::path& path) {
+    midi::MidiSong song;
+    std::string error;
+    if (!midi::LoadMidiFile(path, song, error)) {
+        MessageBoxW(window_, ToWide(error).c_str(), kWindowTitle,
+                    MB_ICONWARNING | MB_OK);
+        return false;
+    }
+    stopMidiPlayback();
+    midiNotes_ = std::move(song.notes);
+    midiDurationSeconds_ = song.lengthSeconds;
+    midiFilePath_ = path;
+    if (midiNotes_.empty()) {
+        midiStatus_ = L"MIDI：文件中没有可播放的音符";
+        midiHoldStatus_ = true;
+        refreshUI();
+        return false;
+    }
+    midiHoldStatus_ = false;
+    updateMidiStatus();
+    return true;
+}
+
+void SatoriAppState::toggleMidiPlayback() {
+    if (midiPlaybackActive_.load(std::memory_order_relaxed)) {
+        stopMidiPlayback();
+    } else {
+        startMidiPlayback();
+    }
+}
+
+void SatoriAppState::startMidiPlayback() {
+    if (midiNotes_.empty()) {
+        MessageBoxW(window_, L"请先加载 MIDI 文件。", kWindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    if (!engine_ || !audioReady_) {
+        MessageBoxW(window_, L"音频未就绪，无法播放 MIDI。", kWindowTitle,
+                    MB_ICONWARNING | MB_OK);
+        return;
+    }
+    stopMidiPlayback();
+    midiStopRequested_.store(false, std::memory_order_relaxed);
+    midiPlaybackActive_.store(true, std::memory_order_release);
+    midiPlaybackStart_ = std::chrono::steady_clock::now();
+    std::vector<midi::MidiNoteEvent> notes = midiNotes_;
+    midiPlaybackThread_ =
+        std::thread(&SatoriAppState::runMidiPlayback, this, std::move(notes));
+    if (window_) {
+        SetTimer(window_, kMidiStatusTimerId, 75, nullptr);
+    }
+    midiHoldStatus_ = false;
+    updateMidiStatus();
+}
+
+void SatoriAppState::runMidiPlayback(std::vector<midi::MidiNoteEvent> notes) {
+    struct ScheduledEvent {
+        double timeSeconds = 0.0;
+        bool noteOn = false;
+        int midiNote = 0;
+        double frequency = 0.0;
+        float velocity = 1.0f;
+    };
+    std::vector<ScheduledEvent> events;
+    events.reserve(notes.size() * 2);
+    for (const auto& note : notes) {
+        ScheduledEvent on;
+        on.timeSeconds = note.startTime;
+        on.noteOn = true;
+        on.midiNote = note.midiNote;
+        on.frequency = note.frequency;
+        on.velocity = note.velocity;
+        events.push_back(on);
+
+        ScheduledEvent off = on;
+        off.noteOn = false;
+        off.timeSeconds = note.startTime + std::max(0.0, note.duration);
+        events.push_back(off);
+    }
+    std::sort(events.begin(), events.end(),
+              [](const ScheduledEvent& a, const ScheduledEvent& b) {
+                  if (a.timeSeconds == b.timeSeconds) {
+                      if (a.noteOn != b.noteOn) {
+                          return a.noteOn && !b.noteOn;
+                      }
+                      return a.midiNote < b.midiNote;
+                  }
+                  return a.timeSeconds < b.timeSeconds;
+              });
+
+    const auto base = midiPlaybackStart_;
+    for (const auto& event : events) {
+        if (midiStopRequested_.load(std::memory_order_acquire)) {
+            break;
+        }
+        const auto targetTime =
+            base + std::chrono::duration<double>(event.timeSeconds);
+        while (!midiStopRequested_.load(std::memory_order_acquire)) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= targetTime) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (midiStopRequested_.load(std::memory_order_acquire)) {
+            break;
+        }
+        if (!engine_) {
+            break;
+        }
+        if (event.noteOn) {
+            engine_->noteOn(event.midiNote, event.frequency,
+                            std::clamp(event.velocity, 0.0f, 1.0f));
+        } else {
+            engine_->noteOff(event.midiNote);
+        }
+    }
+
+    const bool aborted = midiStopRequested_.load(std::memory_order_acquire);
+    if (window_) {
+        PostMessageW(window_, kMsgMidiPlaybackFinished,
+                     static_cast<WPARAM>(aborted ? 1 : 0), 0);
+    }
+}
+
+void SatoriAppState::stopMidiPlayback() {
+    midiStopRequested_.store(true, std::memory_order_release);
+    if (midiPlaybackThread_.joinable()) {
+        midiPlaybackThread_.join();
+    }
+    if (midiPlaybackActive_.load(std::memory_order_relaxed)) {
+        finalizeMidiPlayback(true);
+    } else {
+        midiStopRequested_.store(false, std::memory_order_release);
+    }
+}
+
+void SatoriAppState::onMidiPlaybackCompleted(bool aborted) {
+    if (midiPlaybackThread_.joinable()) {
+        midiPlaybackThread_.join();
+    }
+    finalizeMidiPlayback(aborted);
+}
+
+void SatoriAppState::finalizeMidiPlayback(bool aborted) {
+    midiPlaybackActive_.store(false, std::memory_order_release);
+    midiStopRequested_.store(false, std::memory_order_release);
+    if (window_) {
+        KillTimer(window_, kMidiStatusTimerId);
+    }
+    sendAllNotesOff();
+    if (!midiNotes_.empty()) {
+        std::wstringstream ss;
+        ss << L"MIDI：";
+        ss << (aborted ? L"已停止 " : L"播放完成 ");
+        if (!midiFilePath_.empty()) {
+            ss << midiFilePath_.filename().wstring();
+        }
+        midiStatus_ = ss.str();
+        midiHoldStatus_ = true;
+    } else {
+        midiStatus_.clear();
+        midiHoldStatus_ = false;
+    }
+    refreshUI();
+}
+
+void SatoriAppState::updateMidiStatus() {
+    if (midiNotes_.empty()) {
+        if (!midiStatus_.empty()) {
+            midiStatus_.clear();
+            refreshUI();
+        }
+        return;
+    }
+    if (!midiPlaybackActive_.load(std::memory_order_relaxed) && midiHoldStatus_) {
+        return;
+    }
+    std::wstringstream ss;
+    const std::wstring name =
+        midiFilePath_.empty() ? L"(未命名)" : midiFilePath_.filename().wstring();
+    if (midiPlaybackActive_.load(std::memory_order_relaxed)) {
+        const auto now = std::chrono::steady_clock::now();
+        double elapsed =
+            std::chrono::duration<double>(now - midiPlaybackStart_).count();
+        if (midiDurationSeconds_ > 0.0) {
+            elapsed = std::min(elapsed, midiDurationSeconds_);
+        }
+        ss << L"MIDI：" << name << L" ";
+        ss << std::fixed << std::setprecision(1) << elapsed << L"s";
+        if (midiDurationSeconds_ > 0.0) {
+            ss << L" / " << std::setprecision(1) << midiDurationSeconds_ << L"s";
+        }
+    } else {
+        ss << L"MIDI：已加载 " << name;
+    }
+    const std::wstring newStatus = ss.str();
+    if (newStatus != midiStatus_) {
+        midiStatus_ = newStatus;
+        refreshUI();
+    }
+}
+
+void SatoriAppState::sendAllNotesOff() {
+    if (!engine_) {
+        return;
+    }
+    for (int midi = 0; midi < 128; ++midi) {
+        engine_->noteOff(midi);
+    }
 }
 
 bool SatoriAppState::handleMidiKeyDown(UINT vk, LPARAM lparam) {
@@ -1153,6 +1442,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case kMsgPreviewReady: {
             if (state) {
                 state->onPreviewReady(reinterpret_cast<PreviewPayload*>(lparam));
+                return 0;
+            }
+            break;
+        }
+        case kMsgMidiPlaybackFinished: {
+            if (state) {
+                state->onMidiPlaybackCompleted(wparam != 0);
                 return 0;
             }
             break;

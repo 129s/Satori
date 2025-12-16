@@ -11,6 +11,7 @@
 
 #include "audio/WaveWriter.h"
 #include "engine/StringSynthEngine.h"
+#include "midi/MidiNoteLoader.h"
 #include "synthesis/KarplusStrongSynth.h"
 
 namespace {
@@ -37,10 +38,12 @@ struct AppConfig {
     unsigned int seed = 0;
     float ampRelease = 0.35f;
     std::filesystem::path output = "satori_demo.wav";
+    std::filesystem::path midiFile;
+    bool useMidiFile = false;
 };
 
 void printUsage() {
-    std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--duration 2.0] "
+    std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--midi song.mid] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
                  "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--mix 1.0] [--pickpos 0.5] "
                  "[--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] [--noise white|binary] "
@@ -245,6 +248,10 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     if (auto it = kv.find("output"); it != kv.end()) {
         config.output = it->second;
     }
+    if (auto it = kv.find("midi"); it != kv.end()) {
+        config.midiFile = it->second;
+        config.useMidiFile = true;
+    }
 
     return config;
 }
@@ -300,7 +307,7 @@ std::vector<float> renderWithEngine(engine::StringSynthEngine& engine,
         on.type = engine::EventType::NoteOn;
         on.noteId = noteId;
         on.frequency = note.frequency;
-        on.velocity = 1.0f;
+        on.velocity = std::clamp(note.velocity, 0.0f, 1.0f);
         engine.enqueueEventAt(on, startFrame);
 
         engine::Event off{};
@@ -358,6 +365,34 @@ int main(int argc, char** argv) {
     synthConfig.seed = appConfig.seed;
     synthConfig.excitationMode = appConfig.excitationMode;
     synthEngine.setConfig(synthConfig);
+
+    if (appConfig.useMidiFile) {
+        midi::MidiSong song;
+        std::string midiError;
+        if (!midi::LoadMidiFile(appConfig.midiFile, song, midiError)) {
+            std::cerr << midiError << "\n";
+            return 1;
+        }
+        if (song.notes.empty()) {
+            std::cerr << "MIDI 文件中没有可播放的音符: " << appConfig.midiFile << "\n";
+            return 1;
+        }
+        appConfig.notes.clear();
+        appConfig.notes.reserve(song.notes.size());
+        for (const auto& midiNote : song.notes) {
+            synthesis::NoteEvent event;
+            event.frequency = midiNote.frequency;
+            event.duration = midiNote.duration;
+            event.startTime = midiNote.startTime;
+            event.velocity = midiNote.velocity;
+            appConfig.notes.push_back(event);
+        }
+        if (song.lengthSeconds > 0.0) {
+            appConfig.duration = song.lengthSeconds;
+        }
+        std::cout << "已加载 MIDI: " << appConfig.midiFile << "，共 "
+                  << appConfig.notes.size() << " 个音符。\n";
+    }
 
     std::vector<synthesis::NoteEvent> noteSequence = appConfig.notes;
     if (noteSequence.empty()) {

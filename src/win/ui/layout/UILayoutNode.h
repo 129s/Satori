@@ -13,7 +13,12 @@ enum class UISizeMode { kAuto, kFixed, kPercent };
 
 struct UISizeSpec {
     UISizeMode mode = UISizeMode::kAuto;
-    float value = 0.0f;   // pixels for Fixed，比例 [0,1] 用于 Percent
+    // kFixed: pixels
+    // kPercent: ratio in [0,1] (relative to container height/width)
+    // kAuto: optional "flex weight" used by containers (e.g. UIStackPanel) to
+    //        distribute extra space when the container is larger than the sum of
+    //        preferred sizes; 0 means "do not stretch".
+    float value = 0.0f;
     float minHeight = 0.0f;
 };
 

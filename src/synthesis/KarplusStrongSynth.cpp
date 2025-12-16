@@ -31,13 +31,15 @@ std::vector<float> KarplusStrongSynth::renderNotes(
 
     for (const auto& note : notes) {
         KarplusStrongString string(baseConfig_);
-        auto samples = string.pluck(note.frequency, note.duration, 1.0f);
+        auto samples = string.pluck(
+            note.frequency, note.duration,
+            std::clamp(note.velocity, 0.0f, 1.0f));
         if (samples.empty()) {
             continue;
         }
         noteBuffers.emplace_back(std::move(samples));
-        const std::size_t offsetSamples =
-            static_cast<std::size_t>(std::max(0.0, std::floor(note.startTime * baseConfig_.sampleRate)));
+        const std::size_t offsetSamples = static_cast<std::size_t>(
+            std::max(0.0, std::floor(note.startTime * baseConfig_.sampleRate)));
         offsets.emplace_back(offsetSamples);
     }
 

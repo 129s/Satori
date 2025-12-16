@@ -7,3 +7,5 @@ build_asio/
 
 # Built-in room IR sources (these are intentionally versioned).
 !assets/ir_src/*.wav
+
+.vs

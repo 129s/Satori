@@ -3,8 +3,6 @@
 
 #include <d2d1.h>
 #include <d2d1helper.h>
-#include <dwrite.h>
-#include <dwrite_3.h>
 #include <wrl/client.h>
 
 #include <cmath>
@@ -15,6 +13,7 @@
 #include <memory>
 #include <string>
 
+#include "win/ui/DWriteCompat.h"
 #include "win/ui/D2DHelpers.h"
 #include "win/ui/DebugOverlay.h"
 #include "win/ui/NunitoFont.h"
@@ -40,7 +39,7 @@ ComPtr<ID2D1SolidColorBrush> g_fillBrush;
 ComPtr<ID2D1SolidColorBrush> g_accentBrush;
 ComPtr<ID2D1SolidColorBrush> g_textBrush;
 ComPtr<IDWriteTextFormat> g_textFormat;
-ComPtr<IDWriteFontCollection1> g_nunitoFontCollection;
+ComPtr<SATORI_DWRITE_FONT_COLLECTION_TYPE> g_nunitoFontCollection;
 
 const winui::DebugOverlayPalette kSandboxOverlayPalette =
     winui::MakeUnifiedDebugOverlayPalette();

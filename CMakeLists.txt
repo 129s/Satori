@@ -5,6 +5,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(SATORI_HAS_DWRITE2 0)
+set(SATORI_HAS_DWRITE3 0)
+if (WIN32)
+    include(CheckIncludeFileCXX)
+    check_include_file_cxx("dwrite_2.h" SATORI_HAS_DWRITE2_HEADER)
+    if (SATORI_HAS_DWRITE2_HEADER)
+        set(SATORI_HAS_DWRITE2 1)
+    else()
+        message(WARNING "dwrite_2.h not found; Direct2D UI will use minimal text rendering features.")
+    endif()
+    check_include_file_cxx("dwrite_3.h" SATORI_HAS_DWRITE3_HEADER)
+    if (SATORI_HAS_DWRITE3_HEADER)
+        set(SATORI_HAS_DWRITE3 1)
+    else()
+        message(WARNING "dwrite_3.h not found; falling back to legacy DirectWrite APIs.")
+    endif()
+endif()
+add_compile_definitions(SATORI_HAS_DWRITE2=${SATORI_HAS_DWRITE2})
+add_compile_definitions(SATORI_HAS_DWRITE3=${SATORI_HAS_DWRITE3})
+
 set(SATORI_FONTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/Fonts")
 if (NOT EXISTS "${SATORI_FONTS_DIR}")
     message(FATAL_ERROR "Missing assets/Fonts directory: ${SATORI_FONTS_DIR}")
@@ -35,6 +55,11 @@ add_library(SatoriCoreLib STATIC
 )
 
 target_include_directories(SatoriCoreLib PUBLIC src)
+
+add_library(SatoriMidi STATIC
+    src/midi/MidiNoteLoader.cpp
+)
+target_include_directories(SatoriMidi PUBLIC src)
 
 # Build-time embedding of IR WAVs into compiled C++ arrays (no runtime file IO).
 set(SATORI_IR_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/ir_src")
@@ -161,7 +186,7 @@ if (WIN32)
         src/win/ui/UISkin.cpp
     )
     target_sources(SatoriWinApp PRIVATE "${NUNITO_FONT_RC}")
-    target_link_libraries(SatoriWinApp PRIVATE SatoriRealtimeWin d2d1.lib dwrite.lib)
+    target_link_libraries(SatoriWinApp PRIVATE SatoriRealtimeWin SatoriMidi d2d1.lib dwrite.lib)
     target_compile_definitions(SatoriWinApp PRIVATE
         $<$<CONFIG:Debug>:SATORI_ENABLE_UI_DEBUG=1>)
 
@@ -224,4 +249,4 @@ add_executable(SatoriCLI
     src/main.cpp
 )
 
-target_link_libraries(SatoriCLI PRIVATE SatoriCoreLib)
+target_link_libraries(SatoriCLI PRIVATE SatoriCoreLib SatoriMidi)

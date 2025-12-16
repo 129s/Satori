@@ -57,6 +57,7 @@ private:
     bool surfaceOnly_ = true;
     std::optional<FlowModule> externalHighlight_;
     std::optional<FlowModule> hoverModule_;
+    std::weak_ptr<ParameterKnob> hoverKnob_;
     std::optional<FlowModule> draggingModule_;
     std::size_t maxColumns_ = 3;
 

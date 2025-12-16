@@ -176,7 +176,7 @@ bool Direct2DContext::initialize(HWND hwnd) {
     hr = dwriteFactory_->CreateTextFormat(
         primaryFont,
         useNunitoCollection ? nunitoFontCollection_.Get() : nullptr,
-        DWRITE_FONT_WEIGHT_REGULAR,
+        DWRITE_FONT_WEIGHT_BOLD,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, fontSize,
         L"zh-CN", &textFormat_);
     if (FAILED(hr)) {
@@ -202,8 +202,62 @@ void Direct2DContext::handleDeviceLost() {
 }
 
 void Direct2DContext::setModel(UIModel model) {
+    const bool hadButtons = !model_.buttons.empty();
+    const bool willHaveButtons = !model.buttons.empty();
+    const bool modulesChanged = [&]() {
+        if (model_.modules.size() != model.modules.size()) {
+            return true;
+        }
+        for (std::size_t i = 0; i < model_.modules.size(); ++i) {
+            if (model_.modules[i].module != model.modules[i].module) {
+                return true;
+            }
+        }
+        return false;
+    }();
+
+    const bool needRebuild =
+        !rootLayout_ || (hadButtons != willHaveButtons) || modulesChanged;
+
     model_ = std::move(model);
-    rebuildLayout();
+
+    if (needRebuild) {
+        rebuildLayout();
+        return;
+    }
+
+    if (headerBarNode_) {
+        headerBarNode_->setModel(model_.headerBar);
+    }
+    if (buttonBarNode_) {
+        buttonBarNode_->setButtons(model_.buttons);
+    }
+
+    if (excitationPreviewNode_) {
+        excitationPreviewNode_->setDiagramState(model_.diagram);
+        excitationPreviewNode_->setWaveformSamples(model_.waveformSamples);
+    }
+    if (stringPreviewNode_) {
+        stringPreviewNode_->setDiagramState(model_.diagram);
+        stringPreviewNode_->setWaveformSamples(model_.waveformSamples);
+    }
+    if (bodyPreviewNode_) {
+        bodyPreviewNode_->setDiagramState(model_.diagram);
+        bodyPreviewNode_->setWaveformSamples(model_.waveformSamples);
+    }
+    if (roomReverbPreviewNode_) {
+        roomReverbPreviewNode_->setDiagramState(model_.diagram);
+    }
+
+    if (roomIrSelectorNode_) {
+        roomIrSelectorNode_->setSelectedIndex(model_.diagram.roomIrIndex);
+    }
+
+    if (keyboardNode_) {
+        keyboardNode_->setConfig(model_.keyboardConfig, model_.keyCallback);
+    }
+
+    layoutDirty_ = true;
 }
 
 void Direct2DContext::updateWaveformSamples(
@@ -236,6 +290,9 @@ void Direct2DContext::syncSliders() {
 }
 
 bool Direct2DContext::onPointerDown(float x, float y) {
+    // Pointer hit-testing depends on arranged bounds; ensure layout is ready
+    // even if the model was refreshed from a timer/background callback.
+    ensureLayout();
 #if SATORI_UI_DEBUG_ENABLED
     pointerInside_ = true;
     hasPointerPosition_ = true;
@@ -275,6 +332,9 @@ bool Direct2DContext::onPointerDown(float x, float y) {
 }
 
 bool Direct2DContext::onPointerMove(float x, float y) {
+    // Pointer move can arrive before the next WM_PAINT after a resize/model
+    // update; keep bounds in sync so hover/drag remains responsive.
+    ensureLayout();
 #if SATORI_UI_DEBUG_ENABLED
     pointerInside_ = true;
     hasPointerPosition_ = true;
@@ -690,6 +750,10 @@ void Direct2DContext::rebuildLayout() {
     headerBarNode_ = std::make_shared<HeaderBarNode>();
     headerBarNode_->setModel(model_.headerBar);
     buttonBarNode_.reset();
+    if (!model_.buttons.empty()) {
+        buttonBarNode_ = std::make_shared<ButtonBarNode>();
+        buttonBarNode_->setButtons(model_.buttons);
+    }
 
     // Unified modules: create one preview + one knob panel per FlowModule.
     auto makePreview = [&](FlowModule module) {
@@ -805,8 +869,12 @@ void Direct2DContext::rebuildLayout() {
     auto rootStack = std::make_shared<UIStackPanel>(8.0f);
     std::vector<UIStackPanel::Item> items;
     items.push_back({headerBarNode_, {UISizeMode::kFixed, 56.0f, 56.0f}});
+    if (buttonBarNode_) {
+        items.push_back({buttonBarNode_, {UISizeMode::kAuto, 0.0f, 32.0f}});
+    }
     items.push_back({mainRow, {UISizeMode::kAuto, 0.0f, 480.0f}});
-    items.push_back({keyboardNode_, {UISizeMode::kFixed, 140.0f, 110.0f}});
+    // Let the keyboard expand with the window: opt into "flex" via kAuto + weight.
+    items.push_back({keyboardNode_, {UISizeMode::kAuto, 1.0f, 110.0f}});
     rootStack->setItems(std::move(items));
 
     rootLayout_ = rootStack;
