@@ -34,7 +34,10 @@ TEST_CASE("WASAPIAudioEngine 能完成初始化", "[wasapi]") {
     };
     REQUIRE(engine.initialize(callback));
     REQUIRE(engine.start());
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (callbackCount.load() < 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     engine.stop();
     engine.shutdown();
     REQUIRE(callbackCount.load() >= 1);
