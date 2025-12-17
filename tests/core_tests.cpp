@@ -58,6 +58,67 @@ float rms(const std::vector<float>& buffer,
     return static_cast<float>(std::sqrt(sum / static_cast<double>(count)));
 }
 
+double estimateFundamentalAutocorr(const std::vector<float>& buffer,
+                                  double sampleRate,
+                                  double expectedHz) {
+    if (buffer.empty() || sampleRate <= 0.0 || expectedHz <= 0.0) {
+        return 0.0;
+    }
+
+    const std::size_t start =
+        std::min<std::size_t>(buffer.size(), static_cast<std::size_t>(sampleRate * 0.05));
+    const std::size_t end =
+        std::min<std::size_t>(buffer.size(), start + static_cast<std::size_t>(sampleRate * 0.25));
+    if (end <= start + 8) {
+        return 0.0;
+    }
+
+    const double expectedLag = sampleRate / expectedHz;
+    int minLag = static_cast<int>(std::floor(expectedLag * 0.6));
+    int maxLag = static_cast<int>(std::ceil(expectedLag * 1.6));
+    minLag = std::max(minLag, 2);
+    maxLag = std::min<int>(maxLag, static_cast<int>(end - start - 2));
+    if (maxLag <= minLag) {
+        return 0.0;
+    }
+
+    auto corrAt = [&](int lag) {
+        double sum = 0.0;
+        for (std::size_t i = start + static_cast<std::size_t>(lag); i < end; ++i) {
+            sum += static_cast<double>(buffer[i]) *
+                   static_cast<double>(buffer[i - static_cast<std::size_t>(lag)]);
+        }
+        return sum;
+    };
+
+    double bestCorr = -1.0;
+    int bestLag = minLag;
+    for (int lag = minLag; lag <= maxLag; ++lag) {
+        const double c = corrAt(lag);
+        if (c > bestCorr) {
+            bestCorr = c;
+            bestLag = lag;
+        }
+    }
+
+    double lagEstimate = static_cast<double>(bestLag);
+    if (bestLag > minLag && bestLag < maxLag) {
+        const double c1 = corrAt(bestLag - 1);
+        const double c2 = bestCorr;
+        const double c3 = corrAt(bestLag + 1);
+        const double denom = (c1 - 2.0 * c2 + c3);
+        if (std::abs(denom) > 1e-12) {
+            const double delta = 0.5 * (c1 - c3) / denom;
+            lagEstimate = static_cast<double>(bestLag) + std::clamp(delta, -0.5, 0.5);
+        }
+    }
+
+    if (lagEstimate <= 0.0) {
+        return 0.0;
+    }
+    return sampleRate / lagEstimate;
+}
+
 }  // namespace
 
 TEST_CASE("KarplusStrongString 生成预期长度样本", "[ks-string]") {
@@ -97,6 +158,33 @@ TEST_CASE("KarplusStrongSynth 可混合多音并归一化", "[ks-synth]") {
         maxSample = std::max(maxSample, std::abs(value));
     }
     REQUIRE(maxSample <= Catch::Approx(1.0f).epsilon(0.001f));
+}
+
+TEST_CASE("KarplusStrongString 具备可调分数延迟以便精确调律",
+          "[ks-string][tuning]") {
+    synthesis::StringConfig config;
+    config.sampleRate = 48000.0;
+    config.decay = 0.999f;
+    config.dispersionAmount = 0.0f;
+    config.enableLowpass = true;
+    config.brightness = 0.35f;
+    config.noiseType = synthesis::NoiseType::Binary;
+    config.seed = 123u;
+    config.excitationMode = synthesis::ExcitationMode::FixedNoisePick;
+
+    synthesis::KarplusStrongString string(config);
+    const double targetHz = 440.0;
+    auto samples = string.pluck(targetHz, 0.6, 1.0f);
+    REQUIRE_FALSE(samples.empty());
+
+    const double estimatedHz =
+        estimateFundamentalAutocorr(samples, config.sampleRate, targetHz);
+    REQUIRE(estimatedHz > 0.0);
+
+    const double cents =
+        1200.0 * std::log2(estimatedHz / targetHz);
+    INFO("estimatedHz=" << estimatedHz << " cents=" << cents);
+    REQUIRE(std::abs(cents) < 5.0);
 }
 
 TEST_CASE("String Loop 频散模块在极端参数下保持稳定", "[ks-string][dispersion]") {

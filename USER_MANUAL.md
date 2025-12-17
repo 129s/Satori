@@ -40,6 +40,7 @@
 - `Mix`：激励混合强度
 - `Vel. Sens`：力度敏感度
 - `Position`：拨弦位置（在上方可视化区域内拖动）
+- `Excite Type`：激励类型（Pluck=拨弦，Hammer=敲击）
 
 ### 3.2 String（弦）
 
@@ -95,4 +96,3 @@ Room 相关字段：
 - 确认 `Mix` > 0
 - 切换不同 `IR`（不同 IR 的空间感差异更明显）
 - 确认 `Master Gain` 不为 0，且声音本身有足够延音/能量
-

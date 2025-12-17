@@ -98,6 +98,19 @@ synthesis::ExcitationMode ParseExcitationMode(const std::string& raw, bool& ok) 
     return synthesis::ExcitationMode::RandomNoisePick;
 }
 
+synthesis::ExcitationType ParseExcitationType(const std::string& raw, bool& ok) {
+    const auto lower = ToLower(raw);
+    ok = true;
+    if (lower == "pluck") {
+        return synthesis::ExcitationType::Pluck;
+    }
+    if (lower == "hammer") {
+        return synthesis::ExcitationType::Hammer;
+    }
+    ok = false;
+    return synthesis::ExcitationType::Pluck;
+}
+
 }  // namespace
 
 PresetManager::PresetManager(std::filesystem::path presetDir)
@@ -230,6 +243,14 @@ bool PresetManager::parse(const std::string& content,
         }
         parsed.excitationMode = mode;
     }
+    if (auto excitationType = ExtractValue(content, "excitationType")) {
+        const auto type = ParseExcitationType(*excitationType, ok);
+        if (!ok) {
+            errorMessage = L"Failed to parse excitationType";
+            return false;
+        }
+        parsed.excitationType = type;
+    }
     if (auto seed = ExtractValue(content, "seed")) {
         parsed.seed = ParseUint(*seed, ok);
         if (!ok) {
@@ -273,6 +294,9 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
         << "  \"noiseType\": \""
         << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white") << "\",\n"
+        << "  \"excitationType\": \""
+        << (config.excitationType == synthesis::ExcitationType::Hammer ? "hammer" : "pluck")
+        << "\",\n"
         << "  \"excitationMode\": \""
         << (config.excitationMode == synthesis::ExcitationMode::FixedNoisePick ? "fixed" : "random")
         << "\",\n"

@@ -519,6 +519,21 @@ winui::UIModel SatoriAppState::buildUIModel() {
                   },
                   winui::FlowModule::kExcitation, false));
     excitation.params.push_back(
+        makeParam(L"Excite Type", 0.0f, 1.0f,
+                  [this]() {
+                      return synthConfig_.excitationType == synthesis::ExcitationType::Hammer
+                                 ? 1.0f
+                                 : 0.0f;
+                  },
+                  [this](float value) {
+                      synthConfig_.excitationType =
+                          (value >= 0.5f) ? synthesis::ExcitationType::Hammer
+                                          : synthesis::ExcitationType::Pluck;
+                      syncSynthConfig();
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, false));
+    excitation.params.push_back(
         makeParam(L"Excite Mode", 0.0f, 1.0f,
                   [this]() {
                       return synthConfig_.excitationMode ==
