@@ -943,6 +943,7 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     config_.sampleRate = config.sampleRate;
     config_.seed = config.seed;
     config_.excitationMode = config.excitationMode;
+    config_.excitationType = config.excitationType;
     applyParamUnlocked(ParamId::Decay, static_cast<float>(config.decay), config_,
                        masterGain_);
     applyParamUnlocked(ParamId::Brightness, config.brightness, config_, masterGain_);

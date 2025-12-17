@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <random>
 #include <vector>
 
 namespace dsp {
@@ -12,6 +13,7 @@ namespace synthesis {
 
 enum class NoiseType { White, Binary };
 enum class ExcitationMode { RandomNoisePick, FixedNoisePick };
+enum class ExcitationType { Pluck, Hammer };
 
 struct StringConfig {
     double sampleRate = 44100.0;
@@ -30,6 +32,7 @@ struct StringConfig {
     bool enableLowpass = true;
     unsigned int seed = 0;  // Noise RNG seed (0 uses random_device).
     ExcitationMode excitationMode = ExcitationMode::RandomNoisePick;
+    ExcitationType excitationType = ExcitationType::Pluck;
 };
 
 class KarplusStrongString {
@@ -51,7 +54,7 @@ public:
     bool active() const { return active_; }
     float lastOutput() const { return lastOutput_; }
 
-    // Preview current excitation buffer (delayBuffer_). For visualization/analysis.
+    // Preview current excitation buffer. For visualization/analysis.
     // Typically read after start() and before processSample(). maxSamples=0 = no truncation.
     std::vector<float> excitationBufferPreview(std::size_t maxSamples = 0) const;
 
@@ -66,16 +69,26 @@ private:
     float computeExcitationColor() const;
     void configureFilters();
     std::vector<float> dispersionCoefficients() const;
+    void initializeWaveguideFromExcitation();
+    void injectAtPosition(float position, float value);
 
     StringConfig config_;
-    std::vector<float> delayBuffer_;
+    std::vector<float> excitationBuffer_;
+    std::vector<float> waveToBridge_;
+    std::vector<float> waveToNut_;
     std::vector<float> outputBuffer_;
-    std::size_t readIndex_ = 0;
+    std::size_t bridgeIndex_ = 0;
+    std::size_t nutIndex_ = 0;
     float decayFactor_ = 1.0f;
     bool active_ = false;
     float lastOutput_ = 0.0f;
     unsigned int rngSeed_;
     std::unique_ptr<dsp::FilterChain> filterChain_;
+    float tuningAllpassCoefficient_ = 0.0f;
+    std::size_t hammerSampleIndex_ = 0;
+    std::size_t hammerSamplesTotal_ = 0;
+    float hammerLowpassState_ = 0.0f;
+    std::mt19937 hammerRng_;
     double currentFrequency_ = 440.0;
     float currentVelocity_ = 1.0f;
     float currentPickPosition_ = 0.5f;
