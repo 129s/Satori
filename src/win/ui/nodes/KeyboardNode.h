@@ -32,8 +32,10 @@ public:
 
 private:
     VirtualKeyboard keyboard_;
-    float preferredHeight_ = 120.0f;
+    float preferredHeight_ = 168.0f;
     KeyboardColors colors_{};
+    KeyboardConfig config_{};
+    bool hasConfig_ = false;
 };
 
 }  // namespace winui

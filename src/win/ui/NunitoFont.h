@@ -2,12 +2,12 @@
 
 #include <windows.h>
 
-#include <dwrite_3.h>
 #include <wrl/client.h>
 
 #include <mutex>
 #include <string>
 
+#include "win/ui/DWriteCompat.h"
 #include "win/resources/ResourceIds.h"
 
 namespace winui {
@@ -133,15 +133,13 @@ inline bool EnsureNunitoFontLoaded() {
             return;
         }
         loaded = AddFontResourceExW(path.c_str(), FR_PRIVATE, nullptr) > 0;
-        if (loaded) {
-            SendMessageW(HWND_BROADCAST, WM_FONTCHANGE, 0, 0);
-        }
     });
     return loaded;
 }
 
-inline Microsoft::WRL::ComPtr<IDWriteFontCollection1>
+inline Microsoft::WRL::ComPtr<SATORI_DWRITE_FONT_COLLECTION_TYPE>
 CreateNunitoFontCollection(IDWriteFactory* factory) {
+#if SATORI_HAS_DWRITE3
     if (!factory) {
         return nullptr;
     }
@@ -173,16 +171,21 @@ CreateNunitoFontCollection(IDWriteFactory* factory) {
     if (FAILED(builder1->CreateFontSet(&fontSet))) {
         return nullptr;
     }
-    Microsoft::WRL::ComPtr<IDWriteFontCollection1> fontCollection;
+    Microsoft::WRL::ComPtr<SATORI_DWRITE_FONT_COLLECTION_TYPE> fontCollection;
     if (FAILED(factory3->CreateFontCollectionFromFontSet(
             fontSet.Get(), &fontCollection))) {
         return nullptr;
     }
     return fontCollection;
+#else
+    (void)factory;
+    return nullptr;
+#endif
 }
 
 inline void ApplyChineseFontFallback(IDWriteFactory* factory,
                                      IDWriteTextFormat* format) {
+#if SATORI_HAS_DWRITE2
     if (!factory || !format) {
         return;
     }
@@ -224,6 +227,10 @@ inline void ApplyChineseFontFallback(IDWriteFactory* factory,
     if (SUCCEEDED(format->QueryInterface(IID_PPV_ARGS(&format2)))) {
         format2->SetFontFallback(chineseFallback.Get());
     }
+#else
+    (void)factory;
+    (void)format;
+#endif
 }
 
 }  // namespace winui

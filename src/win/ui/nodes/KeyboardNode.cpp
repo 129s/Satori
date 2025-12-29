@@ -9,10 +9,19 @@ KeyboardNode::KeyboardNode() = default;
 void KeyboardNode::setConfig(const KeyboardConfig& config,
                              std::function<void(int, double, bool)> callback) {
     keyboard_.setCallback(std::move(callback));
-    keyboard_.setShowLabels(config.showLabels);
-    keyboard_.setHoverOutline(config.hoverOutline);
-    keyboard_.setPianoLayout(config.baseMidiNote, config.octaveCount);
-    preferredHeight_ = 140.0f;
+    if (!hasConfig_ || config.showLabels != config_.showLabels) {
+        keyboard_.setShowLabels(config.showLabels);
+    }
+    if (!hasConfig_ || config.hoverOutline != config_.hoverOutline) {
+        keyboard_.setHoverOutline(config.hoverOutline);
+    }
+    if (!hasConfig_ || config.baseMidiNote != config_.baseMidiNote ||
+        config.octaveCount != config_.octaveCount) {
+        keyboard_.setPianoLayout(config.baseMidiNote, config.octaveCount);
+    }
+    config_ = config;
+    hasConfig_ = true;
+    preferredHeight_ = 168.0f;
 }
 
 float KeyboardNode::preferredHeight(float) const {

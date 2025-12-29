@@ -66,10 +66,18 @@ cmake --build build --config Release
   ```
 
   若未指定 `--notes`，则使用 `--freq` 渲染单音；输出路径默认为 `satori_demo.wav`。
+  - 若提供 `--midi your_song.mid`，会自动解析标准 MIDI（Format 0/1）并将整首乐曲渲染为 WAV，可与其它参数（如 `--samplerate`、`--output`）联用：
+
+    ```powershell
+    .\build\Release\SatoriCLI.exe `
+      --midi .\presets\demo.mid `
+      --output demo_render.wav
+    ```
 
 - **Windows UI**：构建后运行 `build\Release\SatoriWinApp.exe`。首次启动会加载内置预设，当前阶段仅提供默认参数体验，暂未开放用户自定义保存；内置虚拟键盘与 `SatoriKeyboardSandbox.exe` 使用相同的钢琴布局与 PC 键盘映射。`SatoriKnobSandbox.exe` 只渲染测试面板，便于独立调校控件。  
   - `F12`：启用 UI 调试模式，只在 Debug 构建可用，并会以纯黄色高亮当前鼠标命中的布局或控件，便于排查排版/命中区域问题。
   - `F11`：导出布局尺寸到调试输出。
+  - Header 下方新增 “加载 MIDI”/“播放/停止 MIDI” 按钮，可选择 `.mid/.midi` 文件并在应用内调参后实时试听；状态条会显示播放进度。
 - **Keyboard Sandbox**：`build\Release\SatoriKeyboardSandbox.exe` 渲染标准钢琴键盘（默认 3 个八度，可在 `src/win/app/KeyboardSandboxMain.cpp` 中调整常量），颜色为黑白基调，带 hover/按压高亮。支持鼠标点击/拖扫和常见 PC 键盘映射：`A S D F G H J` 对应白键，`W E T Y U` 对应黑键，回调会把音名与频率写入 `OutputDebugString`；`F12` 可切换盒模型调试视图。
 
 ## 预设与资产

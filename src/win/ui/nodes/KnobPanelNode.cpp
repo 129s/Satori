@@ -116,33 +116,62 @@ void KnobPanelNode::arrange(const D2D1_RECT_F& bounds) {
             continue;
         }
 
-        const std::size_t columns =
+        const std::size_t sizingColumns =
             std::min<std::size_t>(knobCount, effectiveColumns(knobCount));
+        std::size_t layoutColumns = sizingColumns;
+        const bool evenRowSpacing =
+            !compactLayout_ && surfaceOnly_ && group.module == FlowModule::kExcitation &&
+            knobCount == 4;
+        if (evenRowSpacing) {
+            layoutColumns = 2;
+        }
+        layoutColumns =
+            std::max<std::size_t>(1, std::min<std::size_t>(knobCount, layoutColumns));
         const std::size_t rows =
-            static_cast<std::size_t>((knobCount + columns - 1) / columns);
+            static_cast<std::size_t>((knobCount + layoutColumns - 1) / layoutColumns);
 
         const float cellWidth =
-            (innerWidth - static_cast<float>(columns - 1) * padding_) /
-            static_cast<float>(columns);
+            (innerWidth - static_cast<float>(sizingColumns - 1) * padding_) /
+            static_cast<float>(sizingColumns);
         const float cellHeight =
             (knobAreaHeight - static_cast<float>(rows - 1) * padding_) /
             static_cast<float>(rows);
 
-        for (std::size_t index = 0; index < knobCount; ++index) {
-            auto& entry = group.knobs[index];
-            if (!entry.knob) {
-                continue;
-            }
-            const std::size_t row = index / columns;
-            const std::size_t col = index % columns;
+        for (std::size_t row = 0; row < rows; ++row) {
+            const std::size_t startIndex = row * layoutColumns;
+            const std::size_t remaining =
+                knobCount > startIndex ? (knobCount - startIndex) : 0;
+            const std::size_t countInRow =
+                std::min<std::size_t>(layoutColumns, remaining);
 
-            const float cellLeft =
-                innerLeft + static_cast<float>(col) * (cellWidth + padding_);
-            const float cellTop =
-                knobAreaTop + static_cast<float>(row) * (cellHeight + padding_);
-            const D2D1_RECT_F knobBounds = D2D1::RectF(
-                cellLeft, cellTop, cellLeft + cellWidth, cellTop + cellHeight);
-            entry.knob->setBounds(knobBounds);
+            float gapX = padding_;
+            if (evenRowSpacing && countInRow > 0) {
+                const float totalKnobW = static_cast<float>(countInRow) * cellWidth;
+                const float freeW = innerWidth - totalKnobW;
+                gapX = freeW > 0.0f ? (freeW / static_cast<float>(countInRow + 1))
+                                    : 0.0f;
+            }
+
+            for (std::size_t col = 0; col < countInRow; ++col) {
+                const std::size_t index = startIndex + col;
+                auto& entry = group.knobs[index];
+                if (!entry.knob) {
+                    continue;
+                }
+
+                const float cellLeft = evenRowSpacing
+                                           ? (innerLeft + gapX +
+                                              static_cast<float>(col) *
+                                                  (cellWidth + gapX))
+                                           : (innerLeft + static_cast<float>(col) *
+                                                            (cellWidth + padding_));
+                const float cellTop =
+                    knobAreaTop + static_cast<float>(row) * (cellHeight + padding_);
+                const D2D1_RECT_F knobBounds =
+                    D2D1::RectF(cellLeft, cellTop, cellLeft + cellWidth,
+                               cellTop + cellHeight);
+                entry.knob->setBounds(knobBounds);
+            }
         }
     }
 }
@@ -290,6 +319,9 @@ std::shared_ptr<ParameterKnob> KnobPanelNode::activeKnob() const {
             }
         }
     }
+    if (auto hovered = hoverKnob_.lock()) {
+        return hovered;
+    }
     return nullptr;
 }
 
@@ -316,15 +348,18 @@ std::optional<FlowModule> KnobPanelNode::currentHighlight() const {
 
 bool KnobPanelNode::updateHoverModule(float x, float y) {
     auto previous = hoverModule_;
+    auto previousKnob = hoverKnob_.lock();
     if (draggingModule_) {
         return false;
     }
     std::optional<FlowModule> newHover;
+    std::shared_ptr<ParameterKnob> newHoverKnob;
     for (const auto& group : groups_) {
         for (const auto& entry : group.knobs) {
             if (entry.knob && entry.knob->contains(x, y)) {
                 newHover = entry.module != FlowModule::kNone ? entry.module
                                                              : group.module;
+                newHoverKnob = entry.knob;
                 break;
             }
         }
@@ -333,7 +368,8 @@ bool KnobPanelNode::updateHoverModule(float x, float y) {
         }
     }
     hoverModule_ = newHover;
-    return hoverModule_ != previous;
+    hoverKnob_ = newHoverKnob;
+    return hoverModule_ != previous || newHoverKnob != previousKnob;
 }
 
 }  // namespace winui

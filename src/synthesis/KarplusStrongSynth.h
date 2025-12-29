@@ -10,6 +10,7 @@ struct NoteEvent {
     double frequency = 440.0;
     double duration = 1.0;
     double startTime = 0.0;
+    float velocity = 1.0f;
 };
 
 class KarplusStrongSynth {

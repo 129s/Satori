@@ -3,8 +3,6 @@
 
 #include <d2d1.h>
 #include <d2d1helper.h>
-#include <dwrite.h>
-#include <dwrite_3.h>
 #include <wrl/client.h>
 
 #include <cmath>
@@ -13,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "win/ui/DWriteCompat.h"
 #include "win/ui/D2DHelpers.h"
 #include "win/ui/DebugOverlay.h"
 #include "win/ui/KeyboardKeymap.h"
@@ -33,7 +32,7 @@ HWND g_mainWindow = nullptr;
 
 ComPtr<ID2D1Factory> g_d2dFactory;
 ComPtr<IDWriteFactory> g_dwriteFactory;
-ComPtr<IDWriteFontCollection1> g_nunitoFontCollection;
+ComPtr<SATORI_DWRITE_FONT_COLLECTION_TYPE> g_nunitoFontCollection;
 ComPtr<ID2D1HwndRenderTarget> g_renderTarget;
 ComPtr<ID2D1SolidColorBrush> g_backgroundBrush;
 ComPtr<ID2D1SolidColorBrush> g_whiteFillBrush;

@@ -10,10 +10,9 @@
 #include <vector>
 
 #include <d2d1.h>
-#include <dwrite.h>
-#include <dwrite_3.h>
 #include <wrl/client.h>
 
+#include "win/ui/DWriteCompat.h"
 #include "win/ui/DebugOverlay.h"
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
@@ -103,7 +102,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> keyboardHoverBrush_;
     Microsoft::WRL::ComPtr<IDWriteFactory> dwriteFactory_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> textFormat_;
-    Microsoft::WRL::ComPtr<IDWriteFontCollection1> nunitoFontCollection_;
+    Microsoft::WRL::ComPtr<SATORI_DWRITE_FONT_COLLECTION_TYPE> nunitoFontCollection_;
 
     UISkinConfig skinConfig_{};
     UISkinResources skinResources_{};
