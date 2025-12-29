@@ -10,7 +10,7 @@
 
 namespace winui {
 
-// A module "card" container that provides depth (rounded background + subtle shadow)
+// A module "card" container that provides depth (flat background + subtle shadow)
 // and hosts a preview visualizer (top) plus controls (bottom).
 class ModuleCardNode : public UILayoutNode {
 public:
@@ -19,6 +19,7 @@ public:
                    std::shared_ptr<UILayoutNode> controls);
 
     void setHighlighted(bool highlighted);
+    void setTitleBar(std::wstring title, float fontSize);
 
     float preferredHeight(float width) const override;
     void arrange(const D2D1_RECT_F& bounds) override;
@@ -33,13 +34,15 @@ private:
     std::shared_ptr<UILayoutNode> preview_;
     std::shared_ptr<UILayoutNode> controls_;
     bool highlighted_ = false;
+    std::wstring title_;
 
     float padding_ = 15.0f;
     float spacing_ = 10.0f;
-    float cornerRadius_ = 6.0f;
+    float titleSpacing_ = 8.0f;
+    float titleBarHeight_ = 26.0f;
 
     D2D1_RECT_F inner_{};
+    D2D1_RECT_F titleRect_{};
 };
 
 }  // namespace winui
-

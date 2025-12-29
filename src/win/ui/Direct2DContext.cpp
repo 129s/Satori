@@ -12,10 +12,9 @@
 #include "win/ui/RenderResources.h"
 #include "win/ui/UIModel.h"
 #include "dsp/RoomIrLibrary.h"
-#include "win/ui/nodes/FlowDiagramNode.h"
-#include "win/ui/nodes/ButtonBarNode.h"
-#include "win/ui/nodes/HeaderBarNode.h"
-#include "win/ui/nodes/KnobPanelNode.h"
+#include "win/ui/nodes/FlowDiagramNode.h"      
+#include "win/ui/nodes/HeaderBarNode.h"        
+#include "win/ui/nodes/KnobPanelNode.h"        
 #include "win/ui/nodes/KeyboardNode.h"
 #include "win/ui/nodes/WaveformNode.h"
 #include "win/ui/nodes/ModuleCardNode.h"
@@ -202,8 +201,6 @@ void Direct2DContext::handleDeviceLost() {
 }
 
 void Direct2DContext::setModel(UIModel model) {
-    const bool hadButtons = !model_.buttons.empty();
-    const bool willHaveButtons = !model.buttons.empty();
     const bool modulesChanged = [&]() {
         if (model_.modules.size() != model.modules.size()) {
             return true;
@@ -217,7 +214,7 @@ void Direct2DContext::setModel(UIModel model) {
     }();
 
     const bool needRebuild =
-        !rootLayout_ || (hadButtons != willHaveButtons) || modulesChanged;
+        !rootLayout_ || modulesChanged;
 
     model_ = std::move(model);
 
@@ -228,9 +225,6 @@ void Direct2DContext::setModel(UIModel model) {
 
     if (headerBarNode_) {
         headerBarNode_->setModel(model_.headerBar);
-    }
-    if (buttonBarNode_) {
-        buttonBarNode_->setButtons(model_.buttons);
     }
 
     if (excitationPreviewNode_) {
@@ -461,9 +455,7 @@ void Direct2DContext::dumpLayoutDebugInfo() {
     if (headerBarNode_) {
         output << L"  header    " << formatRect(headerBarNode_->bounds()) << L"\n";
     }
-    if (buttonBarNode_) {
-        output << L"  buttons   " << formatRect(buttonBarNode_->bounds()) << L"\n";
-    }
+    // Legacy ButtonBar removed (controls moved into Header).
     if (excitationPreviewNode_) {
         output << L"  excitation " << formatRect(excitationPreviewNode_->bounds()) << L"\n";
     }
@@ -749,11 +741,7 @@ void Direct2DContext::render() {
 void Direct2DContext::rebuildLayout() {
     headerBarNode_ = std::make_shared<HeaderBarNode>();
     headerBarNode_->setModel(model_.headerBar);
-    buttonBarNode_.reset();
-    if (!model_.buttons.empty()) {
-        buttonBarNode_ = std::make_shared<ButtonBarNode>();
-        buttonBarNode_->setButtons(model_.buttons);
-    }
+    // Legacy ButtonBar removed (controls moved into Header).
 
     // Unified modules: create one preview + one knob panel per FlowModule.
     auto makePreview = [&](FlowModule module) {
@@ -826,7 +814,7 @@ void Direct2DContext::rebuildLayout() {
         std::vector<ModuleUI> filtered;
         for (const auto& m : model_.modules) {
             if (m.module == module) {
-                // The module header is rendered by the preview region; avoid duplicating it here.
+                // The module header is rendered by the card title bar; avoid duplicating it here.
                 ModuleUI copy = m;
                 copy.title.clear();
                 filtered.push_back(std::move(copy));
@@ -850,12 +838,20 @@ void Direct2DContext::rebuildLayout() {
     // Four module cards aligned to the signal flow.
     excitationCardNode_ = std::make_shared<ModuleCardNode>(
         FlowModule::kExcitation, excitationPreviewNode_, excitationKnobsNode_);
+    excitationCardNode_->setTitleBar(L"EXCITATION",
+                                     textFormat_ ? textFormat_->GetFontSize() : 18.0f);
     stringCardNode_ = std::make_shared<ModuleCardNode>(
         FlowModule::kString, stringPreviewNode_, stringKnobsNode_);
+    stringCardNode_->setTitleBar(L"STRING",
+                                 textFormat_ ? textFormat_->GetFontSize() : 18.0f);
     bodyCardNode_ = std::make_shared<ModuleCardNode>(
         FlowModule::kBody, bodyPreviewNode_, bodyKnobsNode_);
+    bodyCardNode_->setTitleBar(L"BODY",
+                               textFormat_ ? textFormat_->GetFontSize() : 18.0f);
     roomCardNode_ = std::make_shared<ModuleCardNode>(
         FlowModule::kRoom, roomPreviewNode_, roomKnobsNode_);
+    roomCardNode_->setTitleBar(L"ROOM",
+                               textFormat_ ? textFormat_->GetFontSize() : 18.0f);
 
     auto mainRow = std::make_shared<UIHorizontalStack>(12.0f);
     mainRow->setItems({
@@ -869,9 +865,6 @@ void Direct2DContext::rebuildLayout() {
     auto rootStack = std::make_shared<UIStackPanel>(8.0f);
     std::vector<UIStackPanel::Item> items;
     items.push_back({headerBarNode_, {UISizeMode::kFixed, 56.0f, 56.0f}});
-    if (buttonBarNode_) {
-        items.push_back({buttonBarNode_, {UISizeMode::kAuto, 0.0f, 32.0f}});
-    }
     items.push_back({mainRow, {UISizeMode::kAuto, 0.0f, 480.0f}});
     // Let the keyboard expand with the window: opt into "flex" via kAuto + weight.
     items.push_back({keyboardNode_, {UISizeMode::kAuto, 1.0f, 110.0f}});
@@ -1047,7 +1040,7 @@ RenderResources Direct2DContext::makeResources() {
     resources.fillBrush = fillBrush_.Get();
     resources.panelBrush = panelBrush_.Get();
     resources.cardBrush = cardBrush_.Get();
-    resources.shadowBrush = shadowBrush_.Get();
+    resources.shadowBrush = shadowBrush_.Get();        
     resources.gridBrush = gridBrush_.Get();
     resources.textFormat = textFormat_.Get();
     resources.skinId = skinConfig_.id;

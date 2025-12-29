@@ -167,7 +167,6 @@ if (WIN32)
         src/win/ui/layout/UIStackPanel.cpp
         src/win/ui/layout/UIHorizontalStack.cpp
         src/win/ui/layout/UIOverlay.cpp
-        src/win/ui/nodes/ButtonBarNode.cpp
         src/win/ui/nodes/HeaderNode.cpp
         src/win/ui/nodes/HeaderBarNode.cpp
         src/win/ui/nodes/SliderPanelNode.cpp

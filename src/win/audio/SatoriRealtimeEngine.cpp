@@ -91,6 +91,10 @@ void SatoriRealtimeEngine::noteOff(int midiNote) {
     synthEngine_.noteOff(midiNote);
 }
 
+void SatoriRealtimeEngine::panic() {
+    synthEngine_.panic();
+}
+
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
     synthesis::StringConfig clamped = config;
     if (clamped.sampleRate <= 0.0) {

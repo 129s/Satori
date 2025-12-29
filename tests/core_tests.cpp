@@ -58,6 +58,39 @@ float rms(const std::vector<float>& buffer,
     return static_cast<float>(std::sqrt(sum / static_cast<double>(count)));
 }
 
+TEST_CASE("StringSynthEngine panic silences immediately", "[engine][panic]") {
+    synthesis::StringConfig config{};
+    config.sampleRate = 48000.0;
+    config.roomAmount = 0.0f;
+
+    engine::StringSynthEngine engine(config);
+
+    const std::uint64_t panicFrame =
+        static_cast<std::uint64_t>(std::lround(config.sampleRate * 0.1));
+
+    engine::Event on{};
+    on.type = engine::EventType::NoteOn;
+    on.noteId = 60;
+    on.frequency = 440.0;
+    on.velocity = 1.0f;
+    on.frameOffset = 0;
+
+    engine::Event panic{};
+    panic.type = engine::EventType::Panic;
+    panic.frameOffset = panicFrame;
+
+    const std::size_t totalFrames = static_cast<std::size_t>(panicFrame + 1024);
+    const auto buffer =
+        renderEngineSequence(engine, {on, panic}, totalFrames, /*channels=*/1);
+
+    float peakAfter = 0.0f;
+    for (std::size_t i = static_cast<std::size_t>(panicFrame); i < buffer.size();
+         ++i) {
+        peakAfter = std::max(peakAfter, std::abs(buffer[i]));
+    }
+    REQUIRE(peakAfter < 1e-6f);
+}
+
 double estimateFundamentalAutocorr(const std::vector<float>& buffer,
                                   double sampleRate,
                                   double expectedHz) {
@@ -264,7 +297,12 @@ TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
 
     auto renderWithTone = [&](float tone, float size) {
         engine::StringSynthEngine engine;
-        engine.setSampleRate(sampleRate);
+        {
+            synthesis::StringConfig config = engine.stringConfig();
+            config.sampleRate = sampleRate;
+            config.seed = 123u;
+            engine.setConfig(config);
+        }
         engine.setParam(engine::ParamId::AmpRelease, 0.08f);
         engine.setParam(engine::ParamId::BodyTone, tone);
         engine.setParam(engine::ParamId::BodySize, size);

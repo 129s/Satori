@@ -13,30 +13,6 @@ bool ContainsPoint(const D2D1_RECT_F& rect, float x, float y) {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
-void DrawTitle(ID2D1HwndRenderTarget* target,
-               ID2D1SolidColorBrush* textBrush,
-               ID2D1SolidColorBrush* gridBrush,
-               ID2D1SolidColorBrush* accentBrush,
-               IDWriteTextFormat* textFormat,
-               const D2D1_RECT_F& rect,
-               const wchar_t* title,
-               bool highlighted) {
-    if (!target || !textFormat || !title) {
-        return;
-    }
-    const float padding = 4.0f;
-    const auto titleRect =
-        D2D1::RectF(rect.left + padding, rect.top + padding,
-                    rect.right - padding, rect.top + padding + 20.0f);
-    ID2D1SolidColorBrush* brush =
-        highlighted && accentBrush ? accentBrush : (textBrush ? textBrush : gridBrush);
-    if (!brush) {
-        return;
-    }
-    target->DrawText(title, static_cast<UINT32>(wcslen(title)), textFormat, titleRect,
-                     brush);
-}
-
 }  // namespace
 
 ModulePreviewNode::ModulePreviewNode(FlowModule module) : module_(module) {}
@@ -95,19 +71,10 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
         return;
     }
 
-    // Top visualization region (leave room for title).
-    const float titleHeight = 26.0f;
-    const float vizTop = inner.top + titleHeight;
-    const float vizHeight = std::max(0.0f, innerHeight - titleHeight);
-    const auto vizRect =
-        D2D1::RectF(inner.left, vizTop, inner.right, vizTop + vizHeight);
+    const auto vizRect = inner;
 
     switch (module_) {
         case FlowModule::kExcitation: {
-            DrawTitle(resources.target, resources.textBrush, resources.gridBrush,
-                      resources.accentBrush, resources.textFormat, bounds_,
-                      L"EXCITATION", highlighted_);
-
             // Transient scope (already normalized in FlowDiagramNode; do it here again for safety).
             const auto& samples = state_.excitationSamples;
             ID2D1SolidColorBrush* scopeBrush =
@@ -221,9 +188,6 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
             break;
         }
         case FlowModule::kString: {
-            DrawTitle(resources.target, resources.textBrush, resources.gridBrush,
-                      resources.accentBrush, resources.textFormat, bounds_,
-                      L"STRING", highlighted_);
             if (resources.accentBrush) {
                 // Thin-line spectrum style (instrument-like, not chunky debug bars).
                 const float w = vizRect.right - vizRect.left;
@@ -272,9 +236,6 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
             break;
         }
         case FlowModule::kBody: {
-            DrawTitle(resources.target, resources.textBrush, resources.gridBrush,
-                      resources.accentBrush, resources.textFormat, bounds_,
-                      L"BODY", highlighted_);
             if (resources.accentBrush) {
                 // Bell-curve-like response curve (Tone shifts, Size changes width).
                 const float w = vizRect.right - vizRect.left;
@@ -348,9 +309,6 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
             break;
         }
         case FlowModule::kRoom: {
-            DrawTitle(resources.target, resources.textBrush, resources.gridBrush,
-                      resources.accentBrush, resources.textFormat, bounds_,
-                      L"ROOM / FX", highlighted_);
             // Reuse waveform view in-room, similar to old FlowDiagramNode.
             waveformView_.setBounds(vizRect);
             if (resources.panelBrush && resources.gridBrush &&
@@ -414,10 +372,7 @@ D2D1_RECT_F ModulePreviewNode::computeVizRect() const {
     if (innerWidth <= 0.0f || innerHeight <= 0.0f) {
         return D2D1::RectF(0, 0, 0, 0);
     }
-    const float titleHeight = 26.0f;
-    const float vizTop = inner.top + titleHeight;
-    const float vizHeight = std::max(0.0f, innerHeight - titleHeight);
-    return D2D1::RectF(inner.left, vizTop, inner.right, vizTop + vizHeight);
+    return inner;
 }
 
 D2D1_RECT_F ModulePreviewNode::computePickTrackRect() const {

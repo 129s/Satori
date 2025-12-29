@@ -8,11 +8,6 @@ namespace winui {
 
 enum class UIMode { Play, Internal };
 
-struct ButtonDescriptor {
-    std::wstring label;
-    std::function<void()> onClick;
-};
-
 struct SliderDescriptor {
     std::wstring label;
     float min = 0.0f;
@@ -81,19 +76,30 @@ struct DropdownModel {
     std::function<void(int)> onChanged;
 };
 
+enum class MidiTransportState { Stopped, Playing, Paused };
+
+struct MidiTransportModel {
+    bool available = false;
+    MidiTransportState state = MidiTransportState::Stopped;
+    std::function<void()> onLoad;
+    std::function<void()> onPlay;
+    std::function<void()> onPause;
+    std::function<void()> onStop;
+};
+
 struct HeaderBarModel {
     std::wstring logoText = L"Satori";
     std::wstring mixSampleRateText;
     DropdownModel device;
     DropdownModel sampleRate;
     DropdownModel bufferFrames;
+    MidiTransportModel midi;
 };
 
 struct UIModel {
     std::vector<std::wstring> instructions;
     UIMode mode = UIMode::Play;
     StatusInfo status;
-    std::vector<ButtonDescriptor> buttons;
     std::vector<SliderDescriptor> sliders;
     std::vector<ModuleUI> modules;
     KeyboardConfig keyboardConfig;

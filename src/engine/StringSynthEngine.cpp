@@ -844,6 +844,11 @@ public:
         }
     }
 
+    void reset() {
+        voices_.clear();
+        ageCounter_ = 0;
+    }
+
     float renderFrame(float masterGain) {
         float mixed = 0.0f;
         for (auto& voice : voices_) {
@@ -1054,8 +1059,14 @@ void StringSynthEngine::noteOff(int noteId) {
     enqueueEvent(event);
 }
 
-void StringSynthEngine::noteOn(double frequency, double durationSeconds) {
+void StringSynthEngine::noteOn(double frequency, double durationSeconds) {      
     noteOn(-1, frequency, 1.0f, durationSeconds);
+}
+
+void StringSynthEngine::panic() {
+    Event event;
+    event.type = EventType::Panic;
+    enqueueEvent(event);
 }
 
 void StringSynthEngine::setParam(ParamId id, float value) {
@@ -1127,12 +1138,26 @@ void StringSynthEngine::process(const ProcessBlock& block) {
     voiceManager_->setSampleRate(currentConfig.sampleRate);
     voiceManager_->setReleaseSeconds(currentAmpRelease);
 
+    bool panicSeen = false;
+    std::uint64_t panicFrame = 0;
+    for (const auto& event : pendingEvents) {
+        if (event.type == EventType::Panic) {
+            if (!panicSeen || event.frameOffset < panicFrame) {
+                panicSeen = true;
+                panicFrame = event.frameOffset;
+            }
+        }
+    }
+
     std::vector<Event> readyEvents;
     std::vector<Event> futureEvents;
     readyEvents.reserve(pendingEvents.size());
     futureEvents.reserve(pendingEvents.size());
 
     for (auto& event : pendingEvents) {
+        if (panicSeen && event.frameOffset > panicFrame) {
+            continue;
+        }
         if (event.frameOffset <= blockStartFrame) {
             event.frameOffset = blockStartFrame;
             readyEvents.push_back(event);
@@ -1145,15 +1170,32 @@ void StringSynthEngine::process(const ProcessBlock& block) {
 
     std::stable_sort(
         readyEvents.begin(), readyEvents.end(),
-        [](const Event& a, const Event& b) { return a.frameOffset < b.frameOffset; });
+        [](const Event& a, const Event& b) {
+            if (a.frameOffset != b.frameOffset) {
+                return a.frameOffset < b.frameOffset;
+            }
+            if (a.type != b.type) {
+                if (a.type == EventType::Panic) {
+                    return true;
+                }
+                if (b.type == EventType::Panic) {
+                    return false;
+                }
+            }
+            return false;
+        });
 
     std::size_t eventIndex = 0;
     for (std::size_t frame = 0; frame < block.frames; ++frame) {
         const std::uint64_t absoluteFrame = blockStartFrame + frame;
         while (eventIndex < readyEvents.size() &&
                readyEvents[eventIndex].frameOffset <= absoluteFrame) {
-            handleEvent(readyEvents[eventIndex], currentConfig, currentMasterGain,
-                        currentAmpRelease);
+            const auto& event = readyEvents[eventIndex];
+            handleEvent(event, currentConfig, currentMasterGain, currentAmpRelease);
+            if (event.type == EventType::Panic) {
+                eventIndex = readyEvents.size();
+                break;
+            }
             ++eventIndex;
         }
 
@@ -1235,6 +1277,21 @@ void StringSynthEngine::handleEvent(const Event& event,
             applyParamUnlocked(event.param, event.paramValue, config, masterGain);
             ampRelease = ampReleaseSeconds_;
             voiceManager_->setReleaseSeconds(ampRelease);
+            break;
+        case EventType::Panic:
+            if (voiceManager_) {
+                voiceManager_->reset();
+            }
+            if (bodyFilter_) {
+                bodyFilter_->reset();
+            }
+            if (roomProcessor_) {
+                roomProcessor_->reset();
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                eventQueue_.clear();
+            }
             break;
         default:
             break;

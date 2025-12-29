@@ -9,6 +9,34 @@ namespace winui {
 namespace {
 float RectWidth(const D2D1_RECT_F& r) { return r.right - r.left; }
 float RectHeight(const D2D1_RECT_F& r) { return r.bottom - r.top; }
+
+struct TextAlignmentGuard {
+    explicit TextAlignmentGuard(IDWriteTextFormat* format,
+                                DWRITE_TEXT_ALIGNMENT textAlignment,
+                                DWRITE_PARAGRAPH_ALIGNMENT paragraphAlignment)
+        : format_(format),
+          oldText_(format ? format->GetTextAlignment() : DWRITE_TEXT_ALIGNMENT_LEADING),
+          oldPara_(format ? format->GetParagraphAlignment() : DWRITE_PARAGRAPH_ALIGNMENT_NEAR) {
+        if (format_) {
+            (void)format_->SetTextAlignment(textAlignment);
+            (void)format_->SetParagraphAlignment(paragraphAlignment);
+        }
+    }
+    ~TextAlignmentGuard() {
+        if (format_) {
+            (void)format_->SetTextAlignment(oldText_);
+            (void)format_->SetParagraphAlignment(oldPara_);
+        }
+    }
+
+    TextAlignmentGuard(const TextAlignmentGuard&) = delete;
+    TextAlignmentGuard& operator=(const TextAlignmentGuard&) = delete;
+
+private:
+    IDWriteTextFormat* format_ = nullptr;
+    DWRITE_TEXT_ALIGNMENT oldText_{};
+    DWRITE_PARAGRAPH_ALIGNMENT oldPara_{};
+};
 }  // namespace
 
 void DropdownSelectorNode::setItems(std::vector<std::wstring> items) {
@@ -137,28 +165,17 @@ void DropdownSelectorNode::draw(const RenderResources& resources) {
         return;
     }
     auto* bg = resources.panelBrush ? resources.panelBrush : resources.trackBrush;
-    auto* border = resources.gridBrush ? resources.gridBrush : resources.trackBrush;
     auto* text = resources.textBrush ? resources.textBrush : resources.gridBrush;
-    if (!bg || !border || !text) {
+    if (!bg || !text) {
         return;
     }
 
     // Base box.
-    const auto rounded = D2D1::RoundedRect(bounds_, 4.0f, 4.0f);
-    resources.target->FillRoundedRectangle(rounded, bg);
-    resources.target->DrawRoundedRectangle(rounded, border, 1.0f);
+    resources.target->FillRectangle(bounds_, bg);
 
     const auto leftArrow = D2D1::RectF(bounds_.left, bounds_.top, bounds_.left + arrowWidth_, bounds_.bottom);
     const auto rightArrow = D2D1::RectF(bounds_.right - arrowWidth_, bounds_.top, bounds_.right, bounds_.bottom);
     const auto labelRect = D2D1::RectF(leftArrow.right, bounds_.top, rightArrow.left, bounds_.bottom);
-
-    // Arrow separators.
-    resources.target->DrawLine(D2D1::Point2F(leftArrow.right, bounds_.top + 4.0f),
-                               D2D1::Point2F(leftArrow.right, bounds_.bottom - 4.0f),
-                               border, 1.0f);
-    resources.target->DrawLine(D2D1::Point2F(rightArrow.left, bounds_.top + 4.0f),
-                               D2D1::Point2F(rightArrow.left, bounds_.bottom - 4.0f),
-                               border, 1.0f);
 
     // Arrow glyphs.
     auto drawArrow = [&](const D2D1_RECT_F& r, bool left) {
@@ -186,8 +203,11 @@ void DropdownSelectorNode::draw(const RenderResources& resources) {
 
     // Label.
     const std::wstring label = selectedLabel();
-    const auto textRect = D2D1::RectF(labelRect.left + padding_, labelRect.top + 3.0f,
-                                      labelRect.right - padding_, labelRect.bottom - 3.0f);
+    const auto textRect =
+        D2D1::RectF(labelRect.left + padding_, labelRect.top, labelRect.right - padding_,
+                    labelRect.bottom);
+    const TextAlignmentGuard align(resources.textFormat, DWRITE_TEXT_ALIGNMENT_CENTER,
+                                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     resources.target->DrawText(label.c_str(), static_cast<UINT32>(label.size()),
                                resources.textFormat, textRect, text);
 }
@@ -200,17 +220,14 @@ void DropdownSelectorNode::drawOverlay(const RenderResources& resources) {
         return;
     }
     auto* bg = resources.cardBrush ? resources.cardBrush : resources.panelBrush;
-    auto* border = resources.gridBrush ? resources.gridBrush : resources.trackBrush;
     auto* text = resources.textBrush ? resources.textBrush : resources.gridBrush;
     auto* accent = resources.accentBrush ? resources.accentBrush : text;
-    if (!bg || !border || !text) {
+    if (!bg || !text) {
         return;
     }
 
     const auto r = overlayRect();
-    const auto rounded = D2D1::RoundedRect(r, 4.0f, 4.0f);
-    resources.target->FillRoundedRectangle(rounded, bg);
-    resources.target->DrawRoundedRectangle(rounded, border, 1.0f);
+    resources.target->FillRectangle(r, bg);
 
     const int count = static_cast<int>(items_.size());
     const int pages = pageCount();
@@ -245,8 +262,6 @@ void DropdownSelectorNode::drawOverlay(const RenderResources& resources) {
     // Page controls (paginated list; no scrolling).
     const auto prev = prevPageRect();
     const auto next = nextPageRect();
-    resources.target->DrawLine(D2D1::Point2F(prev.right, prev.top),
-                               D2D1::Point2F(prev.right, prev.bottom), border, 1.0f);
 
     const bool hasPrev = pageIndex_ > 0;
     const bool hasNext = pages > 0 && pageIndex_ < pages - 1;
@@ -255,10 +270,15 @@ void DropdownSelectorNode::drawOverlay(const RenderResources& resources) {
     const wchar_t* nextText = hasNext ? L"Next" : L"Next";
 
     auto drawButton = [&](const D2D1_RECT_F& br, const wchar_t* label, bool enabled) {
-        ID2D1SolidColorBrush* b = enabled ? text : border;
+        ID2D1SolidColorBrush* b = enabled ? text : text;
+        const float original = b->GetOpacity();
+        if (!enabled) {
+            b->SetOpacity(original * 0.35f);
+        }
         const auto tr = D2D1::RectF(br.left + padding_, br.top + 2.0f, br.right - padding_, br.bottom - 2.0f);
         resources.target->DrawText(label, static_cast<UINT32>(wcslen(label)),
                                    resources.textFormat, tr, b);
+        b->SetOpacity(original);
     };
     drawButton(prev, prevText, hasPrev);
     drawButton(next, nextText, hasNext);
@@ -382,4 +402,3 @@ bool DropdownSelectorNode::onOverlayPointerMove(float x, float y) {
 }
 
 }  // namespace winui
-

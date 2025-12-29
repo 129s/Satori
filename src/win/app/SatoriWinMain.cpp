@@ -171,12 +171,14 @@ private:
     void handleLoadPreset();
     void handleSavePreset();
     void handleLoadMidiFile();
-    void toggleMidiPlayback();
     bool browseForMidiFile(std::filesystem::path& outPath);
     bool loadMidiFromPath(const std::filesystem::path& path);
-    void startMidiPlayback();
-    void stopMidiPlayback();
-    void runMidiPlayback(std::vector<midi::MidiNoteEvent> notes);
+    void playMidiPlayback();
+    void pauseMidiPlayback();
+    void stopMidiPlayback(bool keepPosition = false);
+    void startMidiPlaybackFromOffset(double offsetSeconds);
+    void runMidiPlayback(std::vector<midi::MidiNoteEvent> notes,
+                         double startOffsetSeconds);
     void updateMidiStatus();
     void sendAllNotesOff();
     void finalizeMidiPlayback(bool aborted);
@@ -216,9 +218,11 @@ private:
     double midiDurationSeconds_ = 0.0;
     std::filesystem::path midiFilePath_;
     std::thread midiPlaybackThread_;
-    std::atomic<bool> midiPlaybackActive_{false};
+    enum class MidiPlaybackState { Stopped, Playing, Paused };
+    std::atomic<MidiPlaybackState> midiPlaybackState_{MidiPlaybackState::Stopped};
     std::atomic<bool> midiStopRequested_{false};
     std::chrono::steady_clock::time_point midiPlaybackStart_;
+    double midiPlaybackOffsetSeconds_ = 0.0;
     bool midiHoldStatus_ = false;
 
     static constexpr UINT_PTR kWaveformPreviewTimerId = 1;
@@ -266,7 +270,7 @@ bool SatoriAppState::initialize(HWND hwnd) {
 }
 
 void SatoriAppState::shutdown() {
-    stopMidiPlayback();
+    stopMidiPlayback(/*keepPosition=*/false);
     stopPreviewWorker();
     if (engine_) {
         engine_->stop();
@@ -318,17 +322,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.audioOnline = audioReady_;
     model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
     model.diagram = buildDiagramState();
-
-    model.buttons.clear();
-    model.buttons.push_back(
-        winui::ButtonDescriptor{L"加载 MIDI", [this]() { handleLoadMidiFile(); }});
-    if (!midiNotes_.empty()) {
-        const bool playing = midiPlaybackActive_.load(std::memory_order_relaxed);
-        const std::wstring label = playing ? L"停止 MIDI" : L"播放 MIDI";
-
-        model.buttons.push_back(
-            winui::ButtonDescriptor{label, [this]() { toggleMidiPlayback(); }});
-    }
+    // MIDI controls live in the header bar.
 
     auto findIndexU32 = [](const std::vector<std::uint32_t>& list, std::uint32_t value) {
         const auto it = std::find(list.begin(), list.end(), value);
@@ -345,10 +339,27 @@ winui::UIModel SatoriAppState::buildUIModel() {
     };
 
     model.headerBar.logoText = L"Satori";
+    model.headerBar.midi.available = !midiNotes_.empty();
+    switch (midiPlaybackState_.load(std::memory_order_relaxed)) {
+        case MidiPlaybackState::Playing:
+            model.headerBar.midi.state = winui::MidiTransportState::Playing;
+            break;
+        case MidiPlaybackState::Paused:
+            model.headerBar.midi.state = winui::MidiTransportState::Paused;
+            break;
+        case MidiPlaybackState::Stopped:
+        default:
+            model.headerBar.midi.state = winui::MidiTransportState::Stopped;
+            break;
+    }
+    model.headerBar.midi.onLoad = [this]() { handleLoadMidiFile(); };
+    model.headerBar.midi.onPlay = [this]() { playMidiPlayback(); };
+    model.headerBar.midi.onPause = [this]() { pauseMidiPlayback(); };
+    model.headerBar.midi.onStop = [this]() { stopMidiPlayback(/*keepPosition=*/false); };
     if (engine_) {
         const auto cfg = engine_->audioConfig();
         const auto sr = cfg.sampleRate;
-        const bool asio = cfg.backend == winaudio::AudioBackendType::Asio;
+        const bool asio = cfg.backend == winaudio::AudioBackendType::Asio;      
         if (sr > 0) {
             model.headerBar.mixSampleRateText =
                 (asio ? L"ASIO " : L"Mix ") + std::to_wstring(sr) + L" Hz";
@@ -741,7 +752,7 @@ void SatoriAppState::refreshAudioOptions() {
     }
 }
 
-void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {
+void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {        
     if (!engine_) {
         return;
     }
@@ -749,17 +760,22 @@ void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {
         desiredAudioConfig_.sysHandle = reinterpret_cast<std::uintptr_t>(window_);
     }
 
+    const std::uint32_t requestedBufferFrames = desiredAudioConfig_.bufferFrames;
+
     engine_->stop();
-    const bool ok = engine_->reconfigureAudio(desiredAudioConfig_);
+    const bool ok = engine_->reconfigureAudio(desiredAudioConfig_);       
     audioReady_ = ok && engine_->start();
     if (ok) {
         desiredAudioConfig_ = engine_->audioConfig();
         if (desiredAudioConfig_.backend == winaudio::AudioBackendType::WasapiShared) {
             desiredAudioConfig_.sampleRate = 0;
+            // WASAPI shared mode often chooses an internal buffer size; keep the
+            // requested value so the header selector stays user-controllable.
+            desiredAudioConfig_.bufferFrames = requestedBufferFrames;
         }
         synthConfig_ = engine_->synthConfig();
         masterGain_ = engine_->masterGain();
-        ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);
+        ampRelease_ = engine_->getParam(engine::ParamId::AmpRelease);     
         updateRoomIrPreviewCache();
         refreshFlowDiagram();
         refreshWaveformPreview(lastAuditionFrequency_);
@@ -769,8 +785,16 @@ void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {
 
 void SatoriAppState::updateAudioStatus(bool showDialog) {
     if (audioReady_) {
+        const auto config = engine_ ? engine_->audioConfig() : desiredAudioConfig_;
         std::wstringstream ss;
-        ss << L"音频：在线 (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz)";
+        ss << L"音频：在线 (" << static_cast<int>(synthConfig_.sampleRate) << L" Hz, buffer "
+           << config.bufferFrames;
+        if (desiredAudioConfig_.backend == winaudio::AudioBackendType::WasapiShared &&
+            desiredAudioConfig_.bufferFrames > 0 &&
+            desiredAudioConfig_.bufferFrames != config.bufferFrames) {
+            ss << L", 请求 " << desiredAudioConfig_.bufferFrames;
+        }
+        ss << L")";
         audioStatus_ = ss.str();
     } else {
         std::wstring message = L"音频：初始化失败";
@@ -1065,7 +1089,7 @@ bool SatoriAppState::loadMidiFromPath(const std::filesystem::path& path) {
                     MB_ICONWARNING | MB_OK);
         return false;
     }
-    stopMidiPlayback();
+    stopMidiPlayback(/*keepPosition=*/false);
     midiNotes_ = std::move(song.notes);
     midiDurationSeconds_ = song.lengthSeconds;
     midiFilePath_ = path;
@@ -1080,15 +1104,7 @@ bool SatoriAppState::loadMidiFromPath(const std::filesystem::path& path) {
     return true;
 }
 
-void SatoriAppState::toggleMidiPlayback() {
-    if (midiPlaybackActive_.load(std::memory_order_relaxed)) {
-        stopMidiPlayback();
-    } else {
-        startMidiPlayback();
-    }
-}
-
-void SatoriAppState::startMidiPlayback() {
+void SatoriAppState::playMidiPlayback() {
     if (midiNotes_.empty()) {
         MessageBoxW(window_, L"请先加载 MIDI 文件。", kWindowTitle,
                     MB_ICONINFORMATION | MB_OK);
@@ -1099,13 +1115,41 @@ void SatoriAppState::startMidiPlayback() {
                     MB_ICONWARNING | MB_OK);
         return;
     }
-    stopMidiPlayback();
-    midiStopRequested_.store(false, std::memory_order_relaxed);
-    midiPlaybackActive_.store(true, std::memory_order_release);
+
+    const auto state = midiPlaybackState_.load(std::memory_order_acquire);
+    if (state == MidiPlaybackState::Playing) {
+        return;
+    }
+    double offset = 0.0;
+    if (state == MidiPlaybackState::Paused) {
+        offset = midiPlaybackOffsetSeconds_;
+    }
+    if (midiDurationSeconds_ > 0.0 && offset >= midiDurationSeconds_) {
+        offset = 0.0;
+    }
+    startMidiPlaybackFromOffset(offset);
+}
+
+void SatoriAppState::pauseMidiPlayback() {
+    const auto state = midiPlaybackState_.load(std::memory_order_acquire);
+    if (state != MidiPlaybackState::Playing) {
+        return;
+    }
+    stopMidiPlayback(/*keepPosition=*/true);
+}
+
+void SatoriAppState::startMidiPlaybackFromOffset(double offsetSeconds) {
+    if (midiNotes_.empty() || !engine_ || !audioReady_) {
+        return;
+    }
+    stopMidiPlayback(/*keepPosition=*/false);
+    midiStopRequested_.store(false, std::memory_order_release);
+    midiPlaybackOffsetSeconds_ = std::max(0.0, offsetSeconds);
+    midiPlaybackState_.store(MidiPlaybackState::Playing, std::memory_order_release);
     midiPlaybackStart_ = std::chrono::steady_clock::now();
     std::vector<midi::MidiNoteEvent> notes = midiNotes_;
-    midiPlaybackThread_ =
-        std::thread(&SatoriAppState::runMidiPlayback, this, std::move(notes));
+    midiPlaybackThread_ = std::thread(&SatoriAppState::runMidiPlayback, this,
+                                     std::move(notes), midiPlaybackOffsetSeconds_);
     if (window_) {
         SetTimer(window_, kMidiStatusTimerId, 75, nullptr);
     }
@@ -1113,7 +1157,8 @@ void SatoriAppState::startMidiPlayback() {
     updateMidiStatus();
 }
 
-void SatoriAppState::runMidiPlayback(std::vector<midi::MidiNoteEvent> notes) {
+void SatoriAppState::runMidiPlayback(std::vector<midi::MidiNoteEvent> notes,
+                                     double startOffsetSeconds) {
     struct ScheduledEvent {
         double timeSeconds = 0.0;
         bool noteOn = false;
@@ -1123,9 +1168,16 @@ void SatoriAppState::runMidiPlayback(std::vector<midi::MidiNoteEvent> notes) {
     };
     std::vector<ScheduledEvent> events;
     events.reserve(notes.size() * 2);
+    const double offset = std::max(0.0, startOffsetSeconds);
     for (const auto& note : notes) {
+        const double noteStart = std::max(0.0, note.startTime);
+        const double noteEnd =
+            noteStart + std::max(0.0, static_cast<double>(note.duration));
+        if (noteEnd <= offset) {
+            continue;
+        }
         ScheduledEvent on;
-        on.timeSeconds = note.startTime;
+        on.timeSeconds = noteStart <= offset ? 0.0 : (noteStart - offset);
         on.noteOn = true;
         on.midiNote = note.midiNote;
         on.frequency = note.frequency;
@@ -1134,7 +1186,7 @@ void SatoriAppState::runMidiPlayback(std::vector<midi::MidiNoteEvent> notes) {
 
         ScheduledEvent off = on;
         off.noteOn = false;
-        off.timeSeconds = note.startTime + std::max(0.0, note.duration);
+        off.timeSeconds = noteEnd - offset;
         events.push_back(off);
     }
     std::sort(events.begin(), events.end(),
@@ -1183,19 +1235,85 @@ void SatoriAppState::runMidiPlayback(std::vector<midi::MidiNoteEvent> notes) {
     }
 }
 
-void SatoriAppState::stopMidiPlayback() {
+void SatoriAppState::stopMidiPlayback(bool keepPosition) {
+    const auto state = midiPlaybackState_.load(std::memory_order_acquire);
+    if (state == MidiPlaybackState::Stopped && !keepPosition) {
+        midiPlaybackOffsetSeconds_ = 0.0;
+        return;
+    }
+
+    double positionSeconds = std::max(0.0, midiPlaybackOffsetSeconds_);
+    if (state == MidiPlaybackState::Playing) {
+        const auto now = std::chrono::steady_clock::now();
+        positionSeconds +=
+            std::chrono::duration<double>(now - midiPlaybackStart_).count();
+        if (midiDurationSeconds_ > 0.0) {
+            positionSeconds = std::min(positionSeconds, midiDurationSeconds_);
+        }
+    }
+
     midiStopRequested_.store(true, std::memory_order_release);
     if (midiPlaybackThread_.joinable()) {
         midiPlaybackThread_.join();
     }
-    if (midiPlaybackActive_.load(std::memory_order_relaxed)) {
-        finalizeMidiPlayback(true);
-    } else {
-        midiStopRequested_.store(false, std::memory_order_release);
+    midiStopRequested_.store(false, std::memory_order_release);
+
+    if (window_) {
+        KillTimer(window_, kMidiStatusTimerId);
     }
+    sendAllNotesOff();
+
+    if (midiNotes_.empty()) {
+        midiPlaybackState_.store(MidiPlaybackState::Stopped,
+                                 std::memory_order_release);
+        midiPlaybackOffsetSeconds_ = 0.0;
+        midiStatus_.clear();
+        midiHoldStatus_ = false;
+        refreshUI();
+        return;
+    }
+
+    if (keepPosition && midiDurationSeconds_ > 0.0 &&
+        positionSeconds >= midiDurationSeconds_) {
+        keepPosition = false;
+        positionSeconds = 0.0;
+    }
+
+    if (keepPosition) {
+        midiPlaybackOffsetSeconds_ = positionSeconds;
+        midiPlaybackState_.store(MidiPlaybackState::Paused,
+                                 std::memory_order_release);
+        std::wstringstream ss;
+        ss << L"MIDI：已暂停 ";
+        if (!midiFilePath_.empty()) {
+            ss << midiFilePath_.filename().wstring() << L" ";
+        }
+        ss << std::fixed << std::setprecision(1) << positionSeconds << L"s";
+        if (midiDurationSeconds_ > 0.0) {
+            ss << L" / " << std::setprecision(1) << midiDurationSeconds_ << L"s";
+        }
+        midiStatus_ = ss.str();
+    } else {
+        midiPlaybackOffsetSeconds_ = 0.0;
+        midiPlaybackState_.store(MidiPlaybackState::Stopped,
+                                 std::memory_order_release);
+        std::wstringstream ss;
+        ss << L"MIDI：已停止 ";
+        if (!midiFilePath_.empty()) {
+            ss << midiFilePath_.filename().wstring();
+        }
+        midiStatus_ = ss.str();
+    }
+
+    midiHoldStatus_ = true;
+    refreshUI();
 }
 
 void SatoriAppState::onMidiPlaybackCompleted(bool aborted) {
+    if (midiPlaybackState_.load(std::memory_order_acquire) !=
+        MidiPlaybackState::Playing) {
+        return;
+    }
     if (midiPlaybackThread_.joinable()) {
         midiPlaybackThread_.join();
     }
@@ -1203,7 +1321,8 @@ void SatoriAppState::onMidiPlaybackCompleted(bool aborted) {
 }
 
 void SatoriAppState::finalizeMidiPlayback(bool aborted) {
-    midiPlaybackActive_.store(false, std::memory_order_release);
+    midiPlaybackState_.store(MidiPlaybackState::Stopped, std::memory_order_release);
+    midiPlaybackOffsetSeconds_ = 0.0;
     midiStopRequested_.store(false, std::memory_order_release);
     if (window_) {
         KillTimer(window_, kMidiStatusTimerId);
@@ -1233,20 +1352,32 @@ void SatoriAppState::updateMidiStatus() {
         }
         return;
     }
-    if (!midiPlaybackActive_.load(std::memory_order_relaxed) && midiHoldStatus_) {
+    const auto state = midiPlaybackState_.load(std::memory_order_relaxed);
+    if (state != MidiPlaybackState::Playing && midiHoldStatus_) {
         return;
     }
     std::wstringstream ss;
     const std::wstring name =
         midiFilePath_.empty() ? L"(未命名)" : midiFilePath_.filename().wstring();
-    if (midiPlaybackActive_.load(std::memory_order_relaxed)) {
+    if (state == MidiPlaybackState::Playing) {
         const auto now = std::chrono::steady_clock::now();
         double elapsed =
+            midiPlaybackOffsetSeconds_ +
             std::chrono::duration<double>(now - midiPlaybackStart_).count();
         if (midiDurationSeconds_ > 0.0) {
             elapsed = std::min(elapsed, midiDurationSeconds_);
         }
         ss << L"MIDI：" << name << L" ";
+        ss << std::fixed << std::setprecision(1) << elapsed << L"s";
+        if (midiDurationSeconds_ > 0.0) {
+            ss << L" / " << std::setprecision(1) << midiDurationSeconds_ << L"s";
+        }
+    } else if (state == MidiPlaybackState::Paused) {
+        double elapsed = std::max(0.0, midiPlaybackOffsetSeconds_);
+        if (midiDurationSeconds_ > 0.0) {
+            elapsed = std::min(elapsed, midiDurationSeconds_);
+        }
+        ss << L"MIDI：已暂停 " << name << L" ";
         ss << std::fixed << std::setprecision(1) << elapsed << L"s";
         if (midiDurationSeconds_ > 0.0) {
             ss << L" / " << std::setprecision(1) << midiDurationSeconds_ << L"s";

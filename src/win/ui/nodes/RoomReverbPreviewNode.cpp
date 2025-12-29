@@ -26,7 +26,6 @@ void RoomReverbPreviewNode::arrange(const D2D1_RECT_F& bounds) {
     UILayoutNode::arrange(bounds);
 
     const float padding = 6.0f;
-    const float titleH = 18.0f;
     const float dropdownH = 28.0f;
 
     const auto inner = D2D1::RectF(bounds.left + padding, bounds.top + padding,
@@ -38,8 +37,8 @@ void RoomReverbPreviewNode::arrange(const D2D1_RECT_F& bounds) {
         return;
     }
 
-    selectorRect_ = D2D1::RectF(inner.left, inner.top + titleH,
-                                inner.right, inner.top + titleH + dropdownH);
+    selectorRect_ =
+        D2D1::RectF(inner.left, inner.top, inner.right, inner.top + dropdownH);
     waveformRect_ = D2D1::RectF(inner.left, selectorRect_.bottom + 6.0f,
                                 inner.right, inner.bottom);
 
@@ -55,20 +54,14 @@ void RoomReverbPreviewNode::draw(const RenderResources& resources) {
 
     auto* bg = resources.panelBrush ? resources.panelBrush : resources.trackBrush;
     auto* grid = resources.gridBrush ? resources.gridBrush : resources.trackBrush;
-    auto* text = resources.textBrush ? resources.textBrush : resources.gridBrush;
-    auto* accent = resources.accentBrush ? resources.accentBrush : text;
-    if (!bg || !grid || !text || !accent) {
+    auto* accent =
+        resources.accentBrush ? resources.accentBrush
+                              : (resources.textBrush ? resources.textBrush : grid);
+    if (!bg || !grid || !accent) {
         return;
     }
 
     resources.target->FillRectangle(bounds_, bg);
-
-    // Small module label.
-    const float padding = 6.0f;
-    const auto titleRect =
-        D2D1::RectF(bounds_.left + padding, bounds_.top + padding,
-                    bounds_.right - padding, bounds_.top + padding + 18.0f);
-    resources.target->DrawText(L"ROOM", 4, resources.textFormat, titleRect, text);
 
     if (selector_) {
         selector_->draw(resources);
@@ -102,4 +95,3 @@ void RoomReverbPreviewNode::onPointerUp() {
 }
 
 }  // namespace winui
-

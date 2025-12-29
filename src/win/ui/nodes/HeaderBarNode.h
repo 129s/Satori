@@ -32,6 +32,16 @@ public:
     void onPointerUp() override;
 
 private:
+    enum class MidiButtonId { Load, Play, Pause, Stop };
+    struct MidiButtonState {
+        MidiButtonId id = MidiButtonId::Load;
+        D2D1_RECT_F bounds{};
+        bool pressed = false;
+        bool hovered = false;
+        bool enabled = false;
+        std::function<void()> onClick;
+    };
+
     std::wstring logoText_ = L"Satori";
     std::wstring mixSampleRateText_;
 
@@ -45,9 +55,13 @@ private:
 
     D2D1_RECT_F logoRect_{};
     D2D1_RECT_F mixRect_{};
+    D2D1_RECT_F midiRect_{};
     D2D1_RECT_F deviceLabelRect_{};
     D2D1_RECT_F sampleRateLabelRect_{};
     D2D1_RECT_F bufferFramesLabelRect_{};
+
+    std::vector<MidiButtonState> midiButtons_;
+    int activeMidiButton_ = -1;
 };
 
 }  // namespace winui

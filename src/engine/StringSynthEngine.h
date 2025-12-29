@@ -16,7 +16,7 @@ namespace engine {
 class BodyFilter;
 class RoomProcessor;
 
-enum class EventType { NoteOn, NoteOff, ParamChange };
+enum class EventType { NoteOn, NoteOff, ParamChange, Panic };
 
 struct Event {
     EventType type = EventType::NoteOn;
@@ -53,6 +53,7 @@ public:
                 double durationSeconds = 0.0);
     void noteOff(int noteId);
     void noteOn(double frequency, double durationSeconds);
+    void panic();
 
     void setParam(ParamId id, float value);
     float getParam(ParamId id) const;
