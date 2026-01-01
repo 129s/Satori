@@ -18,24 +18,26 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <vector>
+  #include <vector>
 
 #include "synthesis/KarplusStrongString.h"
 #include "midi/MidiNoteLoader.h"
 #include "win/app/PresetManager.h"
-#include "win/audio/SatoriRealtimeEngine.h"
-#include "win/audio/UnifiedAudioEngine.h"
-#include "win/ui/Direct2DContext.h"
-#include "win/ui/KeyboardKeymap.h"
-#include "win/ui/UIModel.h"
-#include "dsp/RoomIrLibrary.h"
+  #include "win/audio/SatoriRealtimeEngine.h"
+  #include "win/audio/UnifiedAudioEngine.h"
+  #include "win/midi/WinMidiInput.h"
+  #include "win/ui/Direct2DContext.h"
+  #include "win/ui/KeyboardKeymap.h"
+  #include "win/ui/UIModel.h"
+  #include "dsp/RoomIrLibrary.h"
 
 namespace {
 
-const wchar_t kWindowClassName[] = L"SatoriWinClass";
-const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
-constexpr UINT kMsgPreviewReady = WM_APP + 1;
-constexpr UINT kMsgMidiPlaybackFinished = WM_APP + 2;
+  const wchar_t kWindowClassName[] = L"SatoriWinClass";
+  const wchar_t kWindowTitle[] = L"Satori Synth (Preview)";
+  constexpr UINT kMsgPreviewReady = WM_APP + 1;
+  constexpr UINT kMsgMidiPlaybackFinished = WM_APP + 2;
+  constexpr UINT kMsgMidiInputMessage = WM_APP + 3;
 
 // 推荐窗口客户端区域尺寸（也是本迭代的最小可用尺寸）
 constexpr int kMinClientWidth = 1280;
@@ -135,14 +137,15 @@ public:
 
     void onSize(int width, int height);
     void onPaint();
-    void onTimer(UINT_PTR timerId);
-    void onPreviewReady(PreviewPayload* payload);
-    void onMidiPlaybackCompleted(bool aborted);
-    bool onKeyDown(UINT vk, LPARAM lparam);
-    bool onKeyUp(UINT vk);
-    bool onPointerDown(float x, float y);
-    bool onPointerMove(float x, float y);
-    void onPointerUp();
+      void onTimer(UINT_PTR timerId);
+      void onPreviewReady(PreviewPayload* payload);       
+      void onMidiPlaybackCompleted(bool aborted);
+      void onMidiInputMessage(std::uint32_t message);
+      bool onKeyDown(UINT vk, LPARAM lparam);
+      bool onKeyUp(UINT vk);
+      bool onPointerDown(float x, float y);
+      bool onPointerMove(float x, float y);
+      void onPointerUp();
 #if SATORI_UI_DEBUG_ENABLED
     void onMouseLeave();
 #endif
@@ -153,11 +156,13 @@ private:
     winui::FlowDiagramState buildDiagramState() const;
     void refreshUI();
     void refreshFlowDiagram();
-    void updateAudioStatus(bool showDialog);
-    void updatePresetStatus(const std::wstring& text);
-    void refreshAudioOptions();
-    void applyAudioConfigFromHeader(bool showDialog);
-    void syncSynthConfig();
+      void updateAudioStatus(bool showDialog);
+      void updatePresetStatus(const std::wstring& text);
+      void refreshAudioOptions();
+      void applyAudioConfigFromHeader(bool showDialog);
+      void refreshMidiInputOptions();
+      void applyMidiInputFromHeader(bool showDialog);
+      void syncSynthConfig();
     void scheduleWaveformPreview(double frequency = 440.0);
     void scheduleWaveformPreview(double frequency, UINT delayMs);
     void updateRoomIrPreviewCache();
@@ -165,7 +170,8 @@ private:
     void startPreviewWorker();
     void stopPreviewWorker();
     void enqueueWaveformPreview(double frequency);
-    void handleVirtualKeyEvent(int midiNote, double frequency, bool pressed);
+    void handleVirtualKeyEvent(int midiNote, double frequency, bool pressed,
+                               float velocity);
     void initializeKeyBindings();
     void initializePresetSupport();
     void handleLoadPreset();
@@ -177,12 +183,13 @@ private:
     void pauseMidiPlayback();
     void stopMidiPlayback(bool keepPosition = false);
     void startMidiPlaybackFromOffset(double offsetSeconds);
-    void runMidiPlayback(std::vector<midi::MidiNoteEvent> notes,
-                         double startOffsetSeconds);
-    void updateMidiStatus();
-    void sendAllNotesOff();
-    void finalizeMidiPlayback(bool aborted);
-    bool handleMidiKeyDown(UINT vk, LPARAM lparam);
+      void runMidiPlayback(std::vector<midi::MidiNoteEvent> notes,
+                           double startOffsetSeconds);
+      void updateMidiStatus();
+      void sendAllNotesOff();
+      void sendAllNotesOffExceptVirtualKeys();
+      void finalizeMidiPlayback(bool aborted);
+      bool handleMidiKeyDown(UINT vk, LPARAM lparam);
     bool handleMidiKeyUp(UINT vk);
     void releaseAllVirtualKeys();
 
@@ -202,10 +209,11 @@ private:
     bool audioReady_ = false;
     std::wstring audioStatus_ = L"音频：未初始化";
     std::wstring presetStatus_ = L"预设：默认";
-    std::wstring midiStatus_;
-    std::vector<float> waveformSamples_;
-    std::vector<float> excitationSamples_;
-    std::vector<float> roomIrPreviewSamples_;
+      std::wstring midiStatus_;
+      std::wstring midiInputStatus_;
+      std::vector<float> waveformSamples_;
+      std::vector<float> excitationSamples_;
+      std::vector<float> roomIrPreviewSamples_;
     int roomIrPreviewIndex_ = -1;
     double lastAuditionFrequency_ = 440.0;
     double pendingPreviewFrequency_ = 440.0;
@@ -213,8 +221,13 @@ private:
     bool trackingMouseLeave_ = false;
 #endif
     std::unordered_map<UINT, int> virtualKeyToMidi_;
-    std::unordered_map<UINT, int> activeVirtualKeys_;
-    std::vector<midi::MidiNoteEvent> midiNotes_;
+      std::unordered_map<UINT, int> activeVirtualKeys_;
+      std::vector<std::wstring> midiInputItems_;
+      std::vector<std::optional<unsigned int>> midiInputDeviceIds_;
+      int midiInputSelectedIndex_ = 0;
+      std::optional<unsigned int> midiInputSelectedDeviceId_;
+      std::unique_ptr<winmidi::WinMidiInput> midiInput_;
+      std::vector<midi::MidiNoteEvent> midiNotes_;
     double midiDurationSeconds_ = 0.0;
     std::filesystem::path midiFilePath_;
     std::thread midiPlaybackThread_;
@@ -258,25 +271,30 @@ bool SatoriAppState::initialize(HWND hwnd) {
     if (desiredAudioConfig_.backend == winaudio::AudioBackendType::WasapiShared) {
         desiredAudioConfig_.sampleRate = 0;
     }
-    refreshAudioOptions();
-    initializeKeyBindings();
-    initializePresetSupport();
-    updateRoomIrPreviewCache();
-    startPreviewWorker();
-    refreshWaveformPreview();
-    refreshUI();
-    updateAudioStatus(!audioReady_);
-    return true;
+      refreshAudioOptions();
+      refreshMidiInputOptions();
+      initializeKeyBindings();
+      initializePresetSupport();
+      updateRoomIrPreviewCache();
+      applyMidiInputFromHeader(/*showDialog=*/false);
+      startPreviewWorker();
+      refreshWaveformPreview();
+      refreshUI();
+      updateAudioStatus(!audioReady_);
+      return true;
 }
 
 void SatoriAppState::shutdown() {
-    stopMidiPlayback(/*keepPosition=*/false);
-    stopPreviewWorker();
-    if (engine_) {
-        engine_->stop();
-        engine_->shutdown();
-        engine_.reset();
-    }
+      stopMidiPlayback(/*keepPosition=*/false);
+      if (midiInput_) {
+          midiInput_->close();
+      }
+      stopPreviewWorker();
+      if (engine_) {
+          engine_->stop();
+          engine_->shutdown();
+          engine_.reset();
+      }
     releaseAllVirtualKeys();
     d2d_.reset();
     presetManager_.reset();
@@ -289,12 +307,11 @@ winui::FlowDiagramState SatoriAppState::buildDiagramState() const {
     diagram.brightness = synthConfig_.brightness;
     diagram.dispersionAmount = synthConfig_.dispersionAmount;
     diagram.pickPosition = synthConfig_.pickPosition;
+    diagram.waveformType = static_cast<int>(synthConfig_.waveformType);
     diagram.bodyTone = synthConfig_.bodyTone;
     diagram.bodySize = synthConfig_.bodySize;
     diagram.roomAmount = synthConfig_.roomAmount;
     diagram.roomIrIndex = synthConfig_.roomIrIndex;
-    diagram.noiseType =
-        (synthConfig_.noiseType == synthesis::NoiseType::Binary) ? 1 : 0;
     diagram.excitationSamples = excitationSamples_;
     diagram.roomIrPreviewSamples = roomIrPreviewSamples_;
     diagram.highlightedModule = winui::FlowModule::kNone;
@@ -307,22 +324,28 @@ void SatoriAppState::refreshFlowDiagram() {
     }
 }
 
-winui::UIModel SatoriAppState::buildUIModel() {
-    winui::UIModel model;
-    model.mode = uiMode_;
-    model.status.primary = audioStatus_;
-    model.status.secondary = presetStatus_;
-    if (!midiStatus_.empty()) {
-        if (!model.status.secondary.empty()) {
-            model.status.secondary += L" | ";
-        }
-        model.status.secondary += midiStatus_;
-    }
-    model.waveformSamples = waveformSamples_;
-    model.audioOnline = audioReady_;
-    model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
-    model.diagram = buildDiagramState();
-    // MIDI controls live in the header bar.
+  winui::UIModel SatoriAppState::buildUIModel() {
+      winui::UIModel model;
+      model.mode = uiMode_;
+      model.status.primary = audioStatus_;
+      model.status.secondary = presetStatus_;
+      if (!midiStatus_.empty()) {
+          if (!model.status.secondary.empty()) {
+              model.status.secondary += L" | ";
+          }
+          model.status.secondary += midiStatus_;
+      }
+      if (!midiInputStatus_.empty()) {
+          if (!model.status.secondary.empty()) {
+              model.status.secondary += L" | ";
+          }
+          model.status.secondary += midiInputStatus_;
+      }
+      model.waveformSamples = waveformSamples_;
+      model.audioOnline = audioReady_;
+      model.sampleRate = static_cast<float>(synthConfig_.sampleRate);
+      model.diagram = buildDiagramState();
+      // MIDI controls live in the header bar.
 
     auto findIndexU32 = [](const std::vector<std::uint32_t>& list, std::uint32_t value) {
         const auto it = std::find(list.begin(), list.end(), value);
@@ -356,21 +379,12 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.headerBar.midi.onPlay = [this]() { playMidiPlayback(); };
     model.headerBar.midi.onPause = [this]() { pauseMidiPlayback(); };
     model.headerBar.midi.onStop = [this]() { stopMidiPlayback(/*keepPosition=*/false); };
-    if (engine_) {
-        const auto cfg = engine_->audioConfig();
-        const auto sr = cfg.sampleRate;
-        const bool asio = cfg.backend == winaudio::AudioBackendType::Asio;      
-        if (sr > 0) {
-            model.headerBar.mixSampleRateText =
-                (asio ? L"ASIO " : L"Mix ") + std::to_wstring(sr) + L" Hz";
-        }
-    }
-    model.headerBar.device.label = L"Device";
-    model.headerBar.device.items = audioDeviceItems_;
-    model.headerBar.device.pageSize = 8;
-    model.headerBar.device.selectedIndex =
-        findIndexStr(audioDeviceKeys_, makeDeviceKey(desiredAudioConfig_.backend, desiredAudioConfig_.deviceId));
-    model.headerBar.device.onChanged = [this](int index) {
+      model.headerBar.device.label = L"Device";
+      model.headerBar.device.items = audioDeviceItems_;
+      model.headerBar.device.pageSize = 8;
+      model.headerBar.device.selectedIndex =
+          findIndexStr(audioDeviceKeys_, makeDeviceKey(desiredAudioConfig_.backend, desiredAudioConfig_.deviceId));
+      model.headerBar.device.onChanged = [this](int index) {
         if (index < 0 || static_cast<std::size_t>(index) >= audioDeviceKeys_.size()) {
             return;
         }
@@ -388,37 +402,49 @@ winui::UIModel SatoriAppState::buildUIModel() {
             desiredAudioConfig_.deviceId = L"";
         }
         applyAudioConfigFromHeader(/*showDialog=*/true);
-    };
+      };
 
-    const bool usingAsio = desiredAudioConfig_.backend == winaudio::AudioBackendType::Asio;
-    model.headerBar.sampleRate.label = usingAsio ? L"SampleRate" : L"Engine SR";
-    model.headerBar.sampleRate.pageSize = 8;
-    model.headerBar.sampleRate.items.clear();
-    model.headerBar.sampleRate.items.reserve(audioSampleRateOptions_.size());
-    for (auto sr : audioSampleRateOptions_) {
-        model.headerBar.sampleRate.items.push_back(std::to_wstring(sr));
-    }
-    const std::uint32_t currentEngineSr =
-        static_cast<std::uint32_t>(std::lround(std::max(0.0, synthConfig_.sampleRate)));
+      model.headerBar.midiInput.label = L"Input";
+      model.headerBar.midiInput.pageSize = 8;
+      model.headerBar.midiInput.items = midiInputItems_;
+      model.headerBar.midiInput.selectedIndex = std::clamp(
+          midiInputSelectedIndex_, 0,
+          static_cast<int>(std::max<std::size_t>(1, midiInputItems_.size()) - 1));
+      model.headerBar.midiInput.onChanged = [this](int index) {
+          midiInputSelectedIndex_ = index;
+          applyMidiInputFromHeader(/*showDialog=*/true);
+      };
+
+      const bool usingAsio = desiredAudioConfig_.backend == winaudio::AudioBackendType::Asio;
+      model.headerBar.sampleRate.label = L"SampleRate";
+      model.headerBar.sampleRate.pageSize = 8;
+      model.headerBar.sampleRate.items.clear();
     const std::uint32_t currentDeviceSr = engine_ ? engine_->audioConfig().sampleRate : 0u;
-    model.headerBar.sampleRate.selectedIndex = findIndexU32(
-        audioSampleRateOptions_,
-        usingAsio ? (desiredAudioConfig_.sampleRate > 0 ? desiredAudioConfig_.sampleRate : currentDeviceSr)
-                  : currentEngineSr);
-    model.headerBar.sampleRate.onChanged = [this](int index) {
-        if (index < 0 || static_cast<std::size_t>(index) >= audioSampleRateOptions_.size()) {
-            return;
+    if (usingAsio) {
+        model.headerBar.sampleRate.items.reserve(audioSampleRateOptions_.size());
+        for (auto sr : audioSampleRateOptions_) {
+            model.headerBar.sampleRate.items.push_back(std::to_wstring(sr));
         }
-        const std::uint32_t sr = audioSampleRateOptions_[static_cast<std::size_t>(index)];
-        if (desiredAudioConfig_.backend == winaudio::AudioBackendType::Asio) {
-            desiredAudioConfig_.sampleRate = sr;
+        model.headerBar.sampleRate.selectedIndex = findIndexU32(
+            audioSampleRateOptions_,
+            desiredAudioConfig_.sampleRate > 0 ? desiredAudioConfig_.sampleRate : currentDeviceSr);
+        model.headerBar.sampleRate.onChanged = [this](int index) {
+            if (index < 0 || static_cast<std::size_t>(index) >= audioSampleRateOptions_.size()) {
+                return;
+            }
+            desiredAudioConfig_.sampleRate =
+                audioSampleRateOptions_[static_cast<std::size_t>(index)];
             applyAudioConfigFromHeader(/*showDialog=*/true);
+        };
+    } else {
+        if (currentDeviceSr > 0) {
+            model.headerBar.sampleRate.items.push_back(std::to_wstring(currentDeviceSr));
         } else {
-            synthConfig_.sampleRate = static_cast<double>(sr);
-            syncSynthConfig();
-            refreshUI();
+            model.headerBar.sampleRate.items.push_back(L"Auto");
         }
-    };
+        model.headerBar.sampleRate.selectedIndex = 0;
+        model.headerBar.sampleRate.onChanged = {};
+    }
 
     model.headerBar.bufferFrames.label = L"BufferSize";
     model.headerBar.bufferFrames.pageSize = 8;
@@ -464,72 +490,96 @@ winui::UIModel SatoriAppState::buildUIModel() {
 
     std::vector<winui::ModuleUI> modules;
 
-    winui::ModuleUI excitation =
-        makeModule(L"EXCITATION", winui::FlowModule::kExcitation, false);
-    excitation.params.push_back(
-        makeParam(L"Noise Type", 0.0f, 1.0f,
-                  [this]() {
-                      return synthConfig_.noiseType == synthesis::NoiseType::Binary
-                                 ? 1.0f
-                                 : 0.0f;
-                  },
+    // Excitation: two-column generator layout (Wave | Noise).
+    winui::ModuleUI wave =
+        makeModule(L"WAVE", winui::FlowModule::kExcitation, false);
+    // Waveform selection is shown in the Excitation preview dropdown; keep the param for binding.
+    wave.params.push_back(
+        makeParam(L"Waveform", 0.0f, 4.0f,
+                  [this]() { return static_cast<float>(synthConfig_.waveformType); },
                   [this](float value) {
-                      synthConfig_.noiseType = (value >= 0.5f)
-                                                   ? synthesis::NoiseType::Binary
-                                                   : synthesis::NoiseType::White;
+                      const int index = static_cast<int>(std::lround(value));
+                      synthConfig_.waveformType =
+                          static_cast<synthesis::WaveformType>(std::clamp(index, 0, 4));
                       if (engine_) {
-                          engine_->setParam(engine::ParamId::NoiseType,
-                                            synthConfig_.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f);
+                          engine_->setParam(engine::ParamId::WaveformType,
+                                            static_cast<float>(synthConfig_.waveformType));
                       }
-                      scheduleWaveformPreview(lastAuditionFrequency_);
-                  },
-                  winui::FlowModule::kExcitation, true));
-    excitation.params.push_back(
-        makeParam(L"Hardness", 0.0f, 1.0f,
-                  [this]() { return synthConfig_.excitationBrightness; },
-                  [this](float value) {
-                      synthConfig_.excitationBrightness = value;
-                      if (engine_) {
-                          engine_->setParam(engine::ParamId::ExcitationBrightness, value);
-                      }
-                      scheduleWaveformPreview(lastAuditionFrequency_);
-                  },
-                  winui::FlowModule::kExcitation, true));
-    excitation.params.push_back(
-        makeParam(L"Vel. Sens", 0.0f, 1.0f,
-                  [this]() { return synthConfig_.excitationVelocity; },
-                   [this](float value) {
-                       synthConfig_.excitationVelocity = value;
-                       if (engine_) {
-                           engine_->setParam(engine::ParamId::ExcitationVelocity, value);
-                       }
-                       scheduleWaveformPreview(lastAuditionFrequency_);
-                   },
-                   winui::FlowModule::kExcitation, true));
-    excitation.params.push_back(
-        makeParam(L"Mix", 0.0f, 1.0f,
-                  [this]() { return synthConfig_.excitationMix; },
-                  [this](float value) {
-                      synthConfig_.excitationMix = value;
-                      if (engine_) {
-                          engine_->setParam(engine::ParamId::ExcitationMix, value);
-                      }
-                      scheduleWaveformPreview(lastAuditionFrequency_);
-                  },
-                  winui::FlowModule::kExcitation, true));
-    excitation.params.push_back(
-        makeParam(L"Position", 0.05f, 0.95f,
-                  [this]() { return synthConfig_.pickPosition; },
-                  [this](float value) {
-                      synthConfig_.pickPosition = value;
-                      if (engine_) {
-                          engine_->setParam(engine::ParamId::PickPosition, value);
-                      }
-                      refreshFlowDiagram();
                       scheduleWaveformPreview(lastAuditionFrequency_);
                   },
                   winui::FlowModule::kExcitation, false));
-    excitation.params.push_back(
+    wave.params.push_back(
+        makeParam(L"Level", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.waveLevel; },
+                  [this](float value) {
+                      synthConfig_.waveLevel = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::WaveLevel, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
+    wave.params.push_back(
+        makeParam(L"Duty", 0.01f, 0.99f,
+                  [this]() { return synthConfig_.waveDuty; },
+                  [this](float value) {
+                      synthConfig_.waveDuty = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::WaveDuty, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
+
+    winui::ModuleUI noise =
+        makeModule(L"NOISE", winui::FlowModule::kExcitation, false);
+    noise.params.push_back(
+        makeParam(L"Level", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.noiseLevel; },
+                  [this](float value) {
+                      synthConfig_.noiseLevel = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::NoiseLevel, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
+    noise.params.push_back(
+        makeParam(L"Jitter", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.noiseJitter; },
+                  [this](float value) {
+                      synthConfig_.noiseJitter = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::NoiseJitter, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
+    noise.params.push_back(
+        makeParam(L"Drive", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.noiseOverdrive; },
+                  [this](float value) {
+                      synthConfig_.noiseOverdrive = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::NoiseOverdrive, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
+    noise.params.push_back(
+        makeParam(L"Color", 0.0f, 1.0f,
+                  [this]() { return synthConfig_.noiseColor; },
+                  [this](float value) {
+                      synthConfig_.noiseColor = value;
+                      if (engine_) {
+                          engine_->setParam(engine::ParamId::NoiseColor, value);
+                      }
+                      scheduleWaveformPreview(lastAuditionFrequency_);
+                  },
+                  winui::FlowModule::kExcitation, true));
+
+    // Non-surface excitation settings (kept for internal/advanced control).
+    wave.params.push_back(
         makeParam(L"Excite Type", 0.0f, 1.0f,
                   [this]() {
                       return synthConfig_.excitationType == synthesis::ExcitationType::Hammer
@@ -544,7 +594,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
                       scheduleWaveformPreview(lastAuditionFrequency_);
                   },
                   winui::FlowModule::kExcitation, false));
-    excitation.params.push_back(
+    wave.params.push_back(
         makeParam(L"Excite Mode", 0.0f, 1.0f,
                   [this]() {
                       return synthConfig_.excitationMode ==
@@ -561,7 +611,7 @@ winui::UIModel SatoriAppState::buildUIModel() {
                        scheduleWaveformPreview(lastAuditionFrequency_);
                    },
                    winui::FlowModule::kExcitation, false));
-    excitation.params.push_back(
+    wave.params.push_back(
         makeParam(L"Excite Seed", 0.0f, 10000.0f,
                   [this]() { return static_cast<float>(synthConfig_.seed); },
                    [this](float value) {
@@ -572,7 +622,8 @@ winui::UIModel SatoriAppState::buildUIModel() {
                        scheduleWaveformPreview(lastAuditionFrequency_);
                    },
                    winui::FlowModule::kExcitation, false));
-    modules.push_back(std::move(excitation));
+    modules.push_back(std::move(wave));
+    modules.push_back(std::move(noise));
 
     winui::ModuleUI stringModule =
         makeModule(L"STRING LOOP", winui::FlowModule::kString, false);
@@ -613,41 +664,15 @@ winui::UIModel SatoriAppState::buildUIModel() {
         makeParam(L"Lowpass", 0.0f, 1.0f,
                   [this]() { return synthConfig_.enableLowpass ? 1.0f : 0.0f; },
                    [this](float value) {
-                       synthConfig_.enableLowpass = value >= 0.5f;
-                       if (engine_) {
-                           engine_->setParam(engine::ParamId::EnableLowpass,
-                                             synthConfig_.enableLowpass ? 1.0f : 0.0f);
-                       }
-                       scheduleWaveformPreview(lastAuditionFrequency_);
-                   },
+                        synthConfig_.enableLowpass = value >= 0.5f;        
+                        if (engine_) {
+                            engine_->setParam(engine::ParamId::EnableLowpass,
+                                              synthConfig_.enableLowpass ? 1.0f : 0.0f);
+                        }
+                        scheduleWaveformPreview(lastAuditionFrequency_);   
+                    },
                    winui::FlowModule::kString, false));
     modules.push_back(std::move(stringModule));
-
-    winui::ModuleUI bodyModule =
-        makeModule(L"BODY", winui::FlowModule::kBody, true);
-    bodyModule.params.push_back(
-        makeParam(L"Body Tone", 0.0f, 1.0f,
-                  [this]() { return synthConfig_.bodyTone; },
-                   [this](float value) {
-                       synthConfig_.bodyTone = value;
-                       if (engine_) {
-                           engine_->setParam(engine::ParamId::BodyTone, value);
-                       }
-                       scheduleWaveformPreview(lastAuditionFrequency_);
-                   },
-                   winui::FlowModule::kBody, true));
-    bodyModule.params.push_back(
-        makeParam(L"Body Size", 0.0f, 1.0f,
-                  [this]() { return synthConfig_.bodySize; },
-                   [this](float value) {
-                       synthConfig_.bodySize = value;
-                       if (engine_) {
-                           engine_->setParam(engine::ParamId::BodySize, value);
-                       }
-                       scheduleWaveformPreview(lastAuditionFrequency_);
-                   },
-                   winui::FlowModule::kBody, true));
-    modules.push_back(std::move(bodyModule));
 
     winui::ModuleUI roomModule =
         makeModule(L"ROOM", winui::FlowModule::kRoom, true);
@@ -712,8 +737,8 @@ winui::UIModel SatoriAppState::buildUIModel() {
     model.keyboardConfig.octaveCount = kKeyboardOctaveCount;
     model.keyboardConfig.showLabels = false;
     model.keyboardConfig.hoverOutline = false;
-    model.keyCallback = [this](int midi, double freq, bool pressed) {
-        handleVirtualKeyEvent(midi, freq, pressed);
+    model.keyCallback = [this](int midi, double freq, bool pressed, float velocity) {
+        handleVirtualKeyEvent(midi, freq, pressed, velocity);
     };
 
     return model;
@@ -726,41 +751,69 @@ void SatoriAppState::refreshUI() {
     d2d_->setModel(buildUIModel());
 }
 
-void SatoriAppState::refreshAudioOptions() {
-    if (!audioSampleRateOptions_.empty() && !audioBufferFramesOptions_.empty() &&
-        !audioDeviceItems_.empty() && !audioDeviceKeys_.empty()) {
-        return;
-    }
+  void SatoriAppState::refreshAudioOptions() {
+      if (!audioSampleRateOptions_.empty() && !audioBufferFramesOptions_.empty() &&
+          !audioDeviceItems_.empty() && !audioDeviceKeys_.empty()) {
+          return;
+      }
 
-    // Sample rate options (common device rates).
-    audioSampleRateOptions_ = {44100, 48000, 88200, 96000, 176400, 192000};
+      // Sample rate options (common device rates).
+      audioSampleRateOptions_ = {44100, 48000, 88200, 96000, 176400, 192000};
 
-    // Buffer sizes commonly seen in shared-mode WASAPI (device-period based or power-of-two).
-    audioBufferFramesOptions_ = {128, 192, 240, 256, 384, 480, 512, 768,
-                                 960, 1024, 1536, 1920, 2048, 4096};
+      // Buffer sizes commonly seen in shared-mode WASAPI (device-period based or power-of-two).
+      audioBufferFramesOptions_ = {128, 192, 240, 256, 384, 480, 512, 768,
+                                   960, 1024, 1536, 1920, 2048, 4096};
 
-    audioDeviceItems_.clear();
-    audioDeviceKeys_.clear();
+      audioDeviceItems_.clear();
+      audioDeviceKeys_.clear();
 
-    for (const auto& dev : winaudio::UnifiedAudioEngine::EnumerateDevices()) {
-        const wchar_t* tag =
-            (dev.backend == winaudio::AudioBackendType::Asio) ? L"ASIO: " : L"WASAPI: ";
-        audioDeviceItems_.push_back(std::wstring(tag) + dev.name);
-        const wchar_t* prefix =
-            (dev.backend == winaudio::AudioBackendType::Asio) ? L"asio|" : L"wasapi|";
-        audioDeviceKeys_.push_back(std::wstring(prefix) + dev.id);
-    }
-}
+      for (const auto& dev : winaudio::UnifiedAudioEngine::EnumerateDevices()) {
+          audioDeviceItems_.push_back(dev.name);
+          const wchar_t* prefix =
+              (dev.backend == winaudio::AudioBackendType::Asio) ? L"asio|" : L"wasapi|";
+          audioDeviceKeys_.push_back(std::wstring(prefix) + dev.id);
+      }
+  }
 
-void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {        
-    if (!engine_) {
-        return;
-    }
-    if (window_) {
-        desiredAudioConfig_.sysHandle = reinterpret_cast<std::uintptr_t>(window_);
-    }
+  void SatoriAppState::refreshMidiInputOptions() {
+      midiInputItems_.clear();
+      midiInputDeviceIds_.clear();
 
-    const std::uint32_t requestedBufferFrames = desiredAudioConfig_.bufferFrames;
+      midiInputItems_.push_back(L"None");
+      midiInputDeviceIds_.push_back(std::nullopt);
+
+      const auto devices = winmidi::EnumerateMidiInDevices();
+      midiInputItems_.reserve(midiInputItems_.size() + devices.size());
+      midiInputDeviceIds_.reserve(midiInputDeviceIds_.size() + devices.size());
+      for (const auto& dev : devices) {
+          midiInputItems_.push_back(dev.name);
+          midiInputDeviceIds_.push_back(dev.id);
+      }
+
+      // Keep selection stable when devices are re-enumerated.
+      int selected = 0;
+      if (midiInputSelectedDeviceId_.has_value()) {
+          for (std::size_t i = 0; i < midiInputDeviceIds_.size(); ++i) {
+              if (midiInputDeviceIds_[i].has_value() &&
+                  midiInputDeviceIds_[i].value() == midiInputSelectedDeviceId_.value()) {
+                  selected = static_cast<int>(i);
+                  break;
+              }
+          }
+      }
+      midiInputSelectedIndex_ = selected;
+  }
+
+  void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {
+      if (!engine_) {
+          return;
+      }
+      if (window_) {
+          desiredAudioConfig_.sysHandle =
+              reinterpret_cast<std::uintptr_t>(window_);
+      }
+
+      const std::uint32_t requestedBufferFrames = desiredAudioConfig_.bufferFrames;
 
     engine_->stop();
     const bool ok = engine_->reconfigureAudio(desiredAudioConfig_);       
@@ -780,8 +833,66 @@ void SatoriAppState::applyAudioConfigFromHeader(bool showDialog) {
         refreshFlowDiagram();
         refreshWaveformPreview(lastAuditionFrequency_);
     }
-    updateAudioStatus(showDialog && !audioReady_);
-}
+      updateAudioStatus(showDialog && !audioReady_);
+  }
+
+  void SatoriAppState::applyMidiInputFromHeader(bool showDialog) {
+      if (!window_) {
+          return;
+      }
+      if (!midiInput_) {
+          midiInput_ = std::make_unique<winmidi::WinMidiInput>();
+      }
+
+      sendAllNotesOff();
+      midiInput_->close();
+      midiInputSelectedDeviceId_.reset();
+      midiInputStatus_.clear();
+
+      if (midiInputSelectedIndex_ <= 0 ||
+          midiInputSelectedIndex_ >=
+              static_cast<int>(midiInputDeviceIds_.size())) {
+          refreshUI();
+          return;
+      }
+      const auto id = midiInputDeviceIds_[static_cast<std::size_t>(
+          midiInputSelectedIndex_)];
+      if (!id.has_value()) {
+          refreshUI();
+          return;
+      }
+
+      std::string error;
+      const bool ok = midiInput_->open(
+          id.value(),
+          [hwnd = window_](std::uint32_t message) {
+              PostMessageW(hwnd, kMsgMidiInputMessage,
+                           static_cast<WPARAM>(message), 0);
+          },
+          error);
+
+      if (!ok) {
+          if (showDialog) {
+              const std::wstring msg =
+                  L"无法打开 MIDI 输入设备。\n\n" + ToWide(error);
+              MessageBoxW(window_, msg.c_str(), kWindowTitle,
+                          MB_ICONWARNING | MB_OK);
+          }
+          midiInputSelectedIndex_ = 0;
+          refreshUI();
+          return;
+      }
+
+      midiInputSelectedDeviceId_ = id.value();
+      if (midiInputSelectedIndex_ >= 0 &&
+          midiInputSelectedIndex_ <
+              static_cast<int>(midiInputItems_.size())) {
+          midiInputStatus_ = L"Input: " +
+                             midiInputItems_[static_cast<std::size_t>(
+                                 midiInputSelectedIndex_)];
+      }
+      refreshUI();
+  }
 
 void SatoriAppState::updateAudioStatus(bool showDialog) {
     if (audioReady_) {
@@ -865,13 +976,13 @@ void SatoriAppState::refreshWaveformPreview(double frequency) {
 }
 
 void SatoriAppState::handleVirtualKeyEvent(int midiNote, double frequency,
-                                           bool pressed) {
+                                           bool pressed, float velocity) {
     if (frequency <= 0.0) {
         return;
     }
     if (engine_ && audioReady_) {
         if (pressed) {
-            engine_->noteOn(midiNote, frequency);
+            engine_->noteOn(midiNote, frequency, std::clamp(velocity, 0.0f, 1.0f));
         } else {
             engine_->noteOff(midiNote);
         }
@@ -1392,14 +1503,59 @@ void SatoriAppState::updateMidiStatus() {
     }
 }
 
-void SatoriAppState::sendAllNotesOff() {
-    if (!engine_) {
-        return;
-    }
-    for (int midi = 0; midi < 128; ++midi) {
-        engine_->noteOff(midi);
-    }
-}
+  void SatoriAppState::sendAllNotesOff() {
+      if (!engine_) {
+          return;
+      }
+      for (int midi = 0; midi < 128; ++midi) {
+          engine_->noteOff(midi);
+      }
+  }
+
+  void SatoriAppState::sendAllNotesOffExceptVirtualKeys() {
+      if (!engine_) {
+          return;
+      }
+      for (int midi = 0; midi < 128; ++midi) {
+          bool heldByVirtual = false;
+          for (const auto& kv : activeVirtualKeys_) {
+              if (kv.second == midi) {
+                  heldByVirtual = true;
+                  break;
+              }
+          }
+          if (!heldByVirtual) {
+              engine_->noteOff(midi);
+          }
+      }
+  }
+
+  void SatoriAppState::onMidiInputMessage(std::uint32_t message) {
+      if (!engine_ || !audioReady_) {
+          return;
+      }
+      const std::uint8_t status = static_cast<std::uint8_t>(message & 0xFFu);
+      const std::uint8_t data1 = static_cast<std::uint8_t>((message >> 8) & 0xFFu);
+      const std::uint8_t data2 = static_cast<std::uint8_t>((message >> 16) & 0xFFu);
+
+      const std::uint8_t type = static_cast<std::uint8_t>(status & 0xF0u);
+      if (type == 0x90u) {  // Note On
+          if (data2 == 0) {
+              engine_->noteOff(static_cast<int>(data1));
+              return;
+          }
+          const float vel = static_cast<float>(data2) / 127.0f;
+          const double freq = MidiToFrequency(static_cast<int>(data1));
+          engine_->noteOn(static_cast<int>(data1), freq, std::clamp(vel, 0.0f, 1.0f));
+          lastAuditionFrequency_ = freq;
+          scheduleWaveformPreview(freq, 35);
+          return;
+      }
+      if (type == 0x80u) {  // Note Off
+          engine_->noteOff(static_cast<int>(data1));
+          return;
+      }
+  }
 
 bool SatoriAppState::handleMidiKeyDown(UINT vk, LPARAM lparam) {
     if ((lparam & (1 << 30)) != 0) {  // autorepeat
@@ -1535,21 +1691,22 @@ void SatoriAppState::onMouseLeave() {
 }
 #endif
 
-void SatoriAppState::onDeactivate() {
-    releaseAllVirtualKeys();
-    if (d2d_) {
-        d2d_->onPointerUp();
-    }
-}
+  void SatoriAppState::onDeactivate() {
+      releaseAllVirtualKeys();
+      sendAllNotesOff();
+      if (d2d_) {
+          d2d_->onPointerUp();
+      }
+  }
 
 SatoriAppState* GetAppState(HWND hwnd) {
     return reinterpret_cast<SatoriAppState*>(
         GetWindowLongPtr(hwnd, GWLP_USERDATA));
 }
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    auto* state = GetAppState(hwnd);
-    switch (msg) {
+  LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+      auto* state = GetAppState(hwnd);
+      switch (msg) {
         case WM_CREATE: {
             auto* newState = new SatoriAppState();
             SetWindowLongPtr(hwnd, GWLP_USERDATA,
@@ -1592,18 +1749,25 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             break;
         }
-        case kMsgMidiPlaybackFinished: {
-            if (state) {
-                state->onMidiPlaybackCompleted(wparam != 0);
-                return 0;
-            }
-            break;
-        }
-        case WM_TIMER: {
-            if (state) {
-                state->onTimer(static_cast<UINT_PTR>(wparam));
-                return 0;
-            }
+          case kMsgMidiPlaybackFinished: {
+              if (state) {
+                  state->onMidiPlaybackCompleted(wparam != 0);
+                  return 0;
+              }
+              break;
+          }
+          case kMsgMidiInputMessage: {
+              if (state) {
+                  state->onMidiInputMessage(static_cast<std::uint32_t>(wparam));
+                  return 0;
+              }
+              break;
+          }
+          case WM_TIMER: {
+              if (state) {
+                  state->onTimer(static_cast<UINT_PTR>(wparam));
+                  return 0;
+              }
             break;
         }
         case WM_KEYDOWN: {

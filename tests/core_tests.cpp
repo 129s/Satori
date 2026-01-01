@@ -201,7 +201,8 @@ TEST_CASE("KarplusStrongString 具备可调分数延迟以便精确调律",
     config.dispersionAmount = 0.0f;
     config.enableLowpass = true;
     config.brightness = 0.35f;
-    config.noiseType = synthesis::NoiseType::Binary;
+    config.noiseEnabled = true;
+    config.noiseOverdrive = 1.0f;
     config.seed = 123u;
     config.excitationMode = synthesis::ExcitationMode::FixedNoisePick;
 
@@ -287,7 +288,7 @@ TEST_CASE("String Loop 在关闭低通时仍保持稳定", "[ks-string][dispersi
     REQUIRE(peak < 2.5f);
 }
 
-TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
+TEST_CASE("Body 模块断开时不影响输出", "[engine-body]") {
     const double sampleRate = 44100.0;
 
     auto toFrames = [sampleRate](double seconds) {
@@ -349,7 +350,8 @@ TEST_CASE("Body 模块在极端参数下保持有限增益", "[engine-body]") {
     REQUIRE(warmEnergy / neutralEnergy < 2.5f);
     REQUIRE(brightEnergy / neutralEnergy > 0.35f);
     REQUIRE(warmEnergy / neutralEnergy > 0.35f);
-    REQUIRE(brightEnergy != Catch::Approx(warmEnergy));
+    REQUIRE(brightEnergy == Catch::Approx(warmEnergy).margin(1e-4f));
+    REQUIRE(brightEnergy == Catch::Approx(neutralEnergy).margin(1e-4f));
 }
 
 TEST_CASE("Room 模块提供可控的立体扩展", "[engine-room]") {

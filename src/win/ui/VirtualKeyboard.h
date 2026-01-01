@@ -26,7 +26,8 @@ struct KeyboardColors {
 
 class VirtualKeyboard {
 public:
-    using Callback = std::function<void(int midiNote, double frequency, bool pressed)>;
+    using Callback =
+        std::function<void(int midiNote, double frequency, bool pressed, float velocity)>;
 
     void setBounds(const D2D1_RECT_F& bounds);
     void setCallback(Callback callback);
@@ -53,7 +54,8 @@ public:
 
     bool focusedKeyBounds(D2D1_RECT_F& outBounds) const;
     const std::wstring& lastTriggeredLabel() const { return lastTriggeredLabel_; }
-    double lastTriggeredFrequency() const { return lastTriggeredFrequency_; }
+    double lastTriggeredFrequency() const { return lastTriggeredFrequency_; }   
+    float lastTriggeredVelocity() const { return lastTriggeredVelocity_; }
 
 private:
     struct Key {
@@ -73,7 +75,7 @@ private:
     void buildPianoKeys(int baseMidiNote, int octaveCount);
     void layoutPiano();
     Key* hitTest(float x, float y);
-    void triggerKey(Key* key);
+    void triggerKey(Key* key, float velocity);
     void releaseKey(Key* key);
     void updateHoveredKey(Key* key);
     double midiToFrequency(int midi) const;
@@ -92,6 +94,7 @@ private:
     std::unordered_map<int, std::size_t> midiToKeyIndex_;
     std::wstring lastTriggeredLabel_;
     double lastTriggeredFrequency_ = 0.0;
+    float lastTriggeredVelocity_ = 0.0f;
     bool showLabels_ = true;
     bool showHoverOutline_ = true;
 };

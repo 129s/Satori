@@ -46,8 +46,7 @@ public:
     const AudioEngineConfig& audioConfig() const { return audioConfig_; }
 
     // Stops/reinitializes the audio device. In shared-mode WASAPI, the device's
-    // mix sample rate is not user-controlled; the synth may run at a different
-    // internal rate and be resampled to the device rate.
+    // mix sample rate is not user-controlled; the synth runs at the device rate.
     bool reconfigureAudio(const AudioEngineConfig& config);
     const std::string& lastError() const { return audioEngine_.lastError(); }
     RealtimeMetrics metrics() const;

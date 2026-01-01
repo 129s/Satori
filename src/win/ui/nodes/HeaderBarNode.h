@@ -18,6 +18,7 @@ public:
     void setModel(const HeaderBarModel& model);
 
     std::shared_ptr<DropdownSelectorNode> deviceSelector() const { return deviceSelector_; }
+    std::shared_ptr<DropdownSelectorNode> midiInputSelector() const { return midiInputSelector_; }
     std::shared_ptr<DropdownSelectorNode> sampleRateSelector() const { return sampleRateSelector_; }
     std::shared_ptr<DropdownSelectorNode> bufferFramesSelector() const { return bufferFramesSelector_; }
 
@@ -42,23 +43,24 @@ private:
         std::function<void()> onClick;
     };
 
-    std::wstring logoText_ = L"Satori";
-    std::wstring mixSampleRateText_;
+     std::wstring logoText_ = L"Satori";
 
     std::wstring deviceLabel_ = L"Device";
+    std::wstring midiInputLabel_ = L"MIDI In";
     std::wstring sampleRateLabel_ = L"SampleRate";
     std::wstring bufferFramesLabel_ = L"BufferFrames";
 
     std::shared_ptr<DropdownSelectorNode> deviceSelector_;
+    std::shared_ptr<DropdownSelectorNode> midiInputSelector_;
     std::shared_ptr<DropdownSelectorNode> sampleRateSelector_;
-    std::shared_ptr<DropdownSelectorNode> bufferFramesSelector_;
+     std::shared_ptr<DropdownSelectorNode> bufferFramesSelector_;
 
-    D2D1_RECT_F logoRect_{};
-    D2D1_RECT_F mixRect_{};
-    D2D1_RECT_F midiRect_{};
-    D2D1_RECT_F deviceLabelRect_{};
-    D2D1_RECT_F sampleRateLabelRect_{};
-    D2D1_RECT_F bufferFramesLabelRect_{};
+     D2D1_RECT_F logoRect_{};
+     D2D1_RECT_F midiRect_{};
+     D2D1_RECT_F deviceLabelRect_{};
+     D2D1_RECT_F midiInputLabelRect_{};
+     D2D1_RECT_F sampleRateLabelRect_{};
+     D2D1_RECT_F bufferFramesLabelRect_{};
 
     std::vector<MidiButtonState> midiButtons_;
     int activeMidiButton_ = -1;

@@ -125,21 +125,19 @@ private:
     std::shared_ptr<UIHorizontalStack> mainRow_;
     std::shared_ptr<UILayoutNode> leftColumn_;
     std::shared_ptr<UILayoutNode> rightColumn_;
-    // Unified main UI: 4 module preview cards + per-module knob panels.
+    // Unified main UI: module preview cards + per-module knob panels.
     std::shared_ptr<ModulePreviewNode> excitationPreviewNode_;
     std::shared_ptr<ModulePreviewNode> stringPreviewNode_;
-    std::shared_ptr<ModulePreviewNode> bodyPreviewNode_;
     std::shared_ptr<UILayoutNode> roomPreviewNode_;
-    std::shared_ptr<RoomReverbPreviewNode> roomReverbPreviewNode_;
+    std::shared_ptr<RoomReverbPreviewNode> roomReverbPreviewNode_;        
     std::shared_ptr<DropdownSelectorNode> roomIrSelectorNode_;
+    std::shared_ptr<DropdownSelectorNode> excitationWaveformSelectorNode_;
     std::shared_ptr<ModuleCardNode> excitationCardNode_;
     std::shared_ptr<ModuleCardNode> stringCardNode_;
-    std::shared_ptr<ModuleCardNode> bodyCardNode_;
     std::shared_ptr<ModuleCardNode> roomCardNode_;
 
     std::shared_ptr<KnobPanelNode> excitationKnobsNode_;
     std::shared_ptr<KnobPanelNode> stringKnobsNode_;
-    std::shared_ptr<KnobPanelNode> bodyKnobsNode_;
     std::shared_ptr<KnobPanelNode> roomKnobsNode_;
     std::shared_ptr<KeyboardNode> keyboardNode_;
     KeyboardColors keyboardColors_{};

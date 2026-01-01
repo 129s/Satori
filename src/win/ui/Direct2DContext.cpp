@@ -200,7 +200,7 @@ void Direct2DContext::handleDeviceLost() {
     layoutDirty_ = true;
 }
 
-void Direct2DContext::setModel(UIModel model) {
+  void Direct2DContext::setModel(UIModel model) {
     const bool modulesChanged = [&]() {
         if (model_.modules.size() != model.modules.size()) {
             return true;
@@ -223,28 +223,27 @@ void Direct2DContext::setModel(UIModel model) {
         return;
     }
 
-    if (headerBarNode_) {
-        headerBarNode_->setModel(model_.headerBar);
-    }
+      if (headerBarNode_) {
+          headerBarNode_->setModel(model_.headerBar);
+      }
 
-    if (excitationPreviewNode_) {
-        excitationPreviewNode_->setDiagramState(model_.diagram);
-        excitationPreviewNode_->setWaveformSamples(model_.waveformSamples);
-    }
-    if (stringPreviewNode_) {
-        stringPreviewNode_->setDiagramState(model_.diagram);
-        stringPreviewNode_->setWaveformSamples(model_.waveformSamples);
-    }
-    if (bodyPreviewNode_) {
-        bodyPreviewNode_->setDiagramState(model_.diagram);
-        bodyPreviewNode_->setWaveformSamples(model_.waveformSamples);
-    }
-    if (roomReverbPreviewNode_) {
-        roomReverbPreviewNode_->setDiagramState(model_.diagram);
-    }
+      if (excitationPreviewNode_) {
+          excitationPreviewNode_->setDiagramState(model_.diagram);
+          excitationPreviewNode_->setWaveformSamples(model_.diagram.excitationSamples);
+      }
+      if (stringPreviewNode_) {
+          stringPreviewNode_->setDiagramState(model_.diagram);
+          stringPreviewNode_->setWaveformSamples(model_.waveformSamples);
+      }
+      if (roomReverbPreviewNode_) {
+          roomReverbPreviewNode_->setDiagramState(model_.diagram);
+      }
 
     if (roomIrSelectorNode_) {
         roomIrSelectorNode_->setSelectedIndex(model_.diagram.roomIrIndex);
+    }
+    if (excitationWaveformSelectorNode_) {
+        excitationWaveformSelectorNode_->setSelectedIndex(model_.diagram.waveformType);
     }
 
     if (keyboardNode_) {
@@ -254,32 +253,35 @@ void Direct2DContext::setModel(UIModel model) {
     layoutDirty_ = true;
 }
 
-void Direct2DContext::updateWaveformSamples(
-    const std::vector<float>& samples) {
-    model_.waveformSamples = samples;
-    // Room preview uses the selected IR waveform (updated via FlowDiagramState), not output waveform samples.
-}
+  void Direct2DContext::updateWaveformSamples(
+      const std::vector<float>& samples) {
+      model_.waveformSamples = samples;
+      // Room preview uses the selected IR waveform (updated via FlowDiagramState), not output waveform samples.
+      if (stringPreviewNode_) {
+          stringPreviewNode_->setWaveformSamples(model_.waveformSamples);
+      }
+  }
 
-void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
-    model_.diagram = state;
-    if (excitationPreviewNode_) {
-        excitationPreviewNode_->setDiagramState(state);
-    }
-    if (stringPreviewNode_) {
-        stringPreviewNode_->setDiagramState(state);
-    }
-    if (bodyPreviewNode_) {
-        bodyPreviewNode_->setDiagramState(state);
-    }
-    if (roomReverbPreviewNode_) {
-        roomReverbPreviewNode_->setDiagramState(state);
-    }
-}
+  void Direct2DContext::updateDiagramState(const FlowDiagramState& state) {
+      model_.diagram = state;
+      if (excitationPreviewNode_) {
+          excitationPreviewNode_->setDiagramState(state);
+          excitationPreviewNode_->setWaveformSamples(state.excitationSamples);
+      }
+      if (stringPreviewNode_) {
+          stringPreviewNode_->setDiagramState(state);
+      }
+      if (roomReverbPreviewNode_) {
+          roomReverbPreviewNode_->setDiagramState(state);
+      }
+      if (excitationWaveformSelectorNode_) {
+          excitationWaveformSelectorNode_->setSelectedIndex(state.waveformType);
+      }
+  }
 
 void Direct2DContext::syncSliders() {
     if (excitationKnobsNode_) excitationKnobsNode_->syncKnobs();
     if (stringKnobsNode_) stringKnobsNode_->syncKnobs();
-    if (bodyKnobsNode_) bodyKnobsNode_->syncKnobs();
     if (roomKnobsNode_) roomKnobsNode_->syncKnobs();
 }
 
@@ -298,15 +300,17 @@ bool Direct2DContext::onPointerDown(float x, float y) {
     auto routeOverlayDown = [&](const std::shared_ptr<DropdownSelectorNode>& node) {
         return node && node->isOpen() && node->onOverlayPointerDown(x, y);
     };
-    if ((headerBarNode_ &&
-         (routeOverlayDown(headerBarNode_->deviceSelector()) ||
-          routeOverlayDown(headerBarNode_->sampleRateSelector()) ||
-          routeOverlayDown(headerBarNode_->bufferFramesSelector()))) ||
-        routeOverlayDown(roomIrSelectorNode_)) {
+        if ((headerBarNode_ &&
+             (routeOverlayDown(headerBarNode_->deviceSelector()) ||
+              routeOverlayDown(headerBarNode_->midiInputSelector()) ||
+              routeOverlayDown(headerBarNode_->sampleRateSelector()) ||
+              routeOverlayDown(headerBarNode_->bufferFramesSelector()))) ||
+            routeOverlayDown(excitationWaveformSelectorNode_) ||
+            routeOverlayDown(roomIrSelectorNode_)) {
 #if SATORI_UI_DEBUG_ENABLED
-        const bool selectionChanged = updateDebugSelection(x, y);
-        pointerCaptured_ = true;
-        (void)selectionChanged;
+          const bool selectionChanged = updateDebugSelection(x, y);
+          pointerCaptured_ = true;
+          (void)selectionChanged;
         return true;
 #else
         pointerCaptured_ = true;
@@ -338,15 +342,17 @@ bool Direct2DContext::onPointerMove(float x, float y) {
     auto routeOverlayMove = [&](const std::shared_ptr<DropdownSelectorNode>& node) {
         return node && node->isOpen() && node->onOverlayPointerMove(x, y);
     };
-    if ((headerBarNode_ &&
-         (routeOverlayMove(headerBarNode_->deviceSelector()) ||
-          routeOverlayMove(headerBarNode_->sampleRateSelector()) ||
-          routeOverlayMove(headerBarNode_->bufferFramesSelector()))) ||
-        routeOverlayMove(roomIrSelectorNode_)) {
+        if ((headerBarNode_ &&
+             (routeOverlayMove(headerBarNode_->deviceSelector()) ||
+              routeOverlayMove(headerBarNode_->midiInputSelector()) ||
+              routeOverlayMove(headerBarNode_->sampleRateSelector()) ||
+              routeOverlayMove(headerBarNode_->bufferFramesSelector()))) ||
+            routeOverlayMove(excitationWaveformSelectorNode_) ||
+            routeOverlayMove(roomIrSelectorNode_)) {
 #if SATORI_UI_DEBUG_ENABLED
-        const bool selectionChanged = updateDebugSelection(x, y);
-        (void)selectionChanged;
-        return true;
+          const bool selectionChanged = updateDebugSelection(x, y);
+          (void)selectionChanged;
+          return true;
 #else
         return true;
 #endif
@@ -462,9 +468,6 @@ void Direct2DContext::dumpLayoutDebugInfo() {
     if (stringPreviewNode_) {
         output << L"  string    " << formatRect(stringPreviewNode_->bounds()) << L"\n";
     }
-    if (bodyPreviewNode_) {
-        output << L"  body      " << formatRect(bodyPreviewNode_->bounds()) << L"\n";
-    }
     if (roomPreviewNode_) {
         output << L"  room      " << formatRect(roomPreviewNode_->bounds()) << L"\n";
     }
@@ -473,9 +476,6 @@ void Direct2DContext::dumpLayoutDebugInfo() {
     }
     if (stringKnobsNode_) {
         output << L"  st-knobs  " << formatRect(stringKnobsNode_->bounds()) << L"\n";
-    }
-    if (bodyKnobsNode_) {
-        output << L"  bd-knobs  " << formatRect(bodyKnobsNode_->bounds()) << L"\n";
     }
     if (roomKnobsNode_) {
         output << L"  rm-knobs  " << formatRect(roomKnobsNode_->bounds()) << L"\n";
@@ -682,7 +682,6 @@ void Direct2DContext::render() {
         };
         (void)(pickHighlight(excitationKnobsNode_) ||
                pickHighlight(stringKnobsNode_) ||
-               pickHighlight(bodyKnobsNode_) ||
                pickHighlight(roomKnobsNode_));
         if (highlight == FlowModule::kNone) {
             if (excitationPreviewNode_ && excitationPreviewNode_->isInteracting()) {
@@ -693,10 +692,8 @@ void Direct2DContext::render() {
         model_.diagram.highlightedModule = highlight;
         if (excitationPreviewNode_) excitationPreviewNode_->setHighlighted(highlight == FlowModule::kExcitation);
         if (stringPreviewNode_) stringPreviewNode_->setHighlighted(highlight == FlowModule::kString);
-        if (bodyPreviewNode_) bodyPreviewNode_->setHighlighted(highlight == FlowModule::kBody);
         if (excitationCardNode_) excitationCardNode_->setHighlighted(highlight == FlowModule::kExcitation);
         if (stringCardNode_) stringCardNode_->setHighlighted(highlight == FlowModule::kString);
-        if (bodyCardNode_) bodyCardNode_->setHighlighted(highlight == FlowModule::kBody);
         if (roomCardNode_) roomCardNode_->setHighlighted(highlight == FlowModule::kRoom);
 
         auto resources = makeResources();
@@ -713,7 +710,6 @@ void Direct2DContext::render() {
         };
         (void)(drawActiveTooltip(excitationKnobsNode_) ||
                drawActiveTooltip(stringKnobsNode_) ||
-               drawActiveTooltip(bodyKnobsNode_) ||
                drawActiveTooltip(roomKnobsNode_));
         // Draw dropdown overlay last so it appears above knobs/cards.
         auto drawDropdownOverlay = [&](const std::shared_ptr<DropdownSelectorNode>& node) {
@@ -723,9 +719,11 @@ void Direct2DContext::render() {
         };
         if (headerBarNode_) {
             drawDropdownOverlay(headerBarNode_->deviceSelector());
+            drawDropdownOverlay(headerBarNode_->midiInputSelector());
             drawDropdownOverlay(headerBarNode_->sampleRateSelector());
             drawDropdownOverlay(headerBarNode_->bufferFramesSelector());
         }
+        drawDropdownOverlay(excitationWaveformSelectorNode_);
         drawDropdownOverlay(roomIrSelectorNode_);
 #if SATORI_UI_DEBUG_ENABLED
         drawDebugOverlay();
@@ -738,27 +736,33 @@ void Direct2DContext::render() {
     }
 }
 
-void Direct2DContext::rebuildLayout() {
+  void Direct2DContext::rebuildLayout() {
     headerBarNode_ = std::make_shared<HeaderBarNode>();
     headerBarNode_->setModel(model_.headerBar);
     // Legacy ButtonBar removed (controls moved into Header).
 
     // Unified modules: create one preview + one knob panel per FlowModule.
-    auto makePreview = [&](FlowModule module) {
-        auto node = std::make_shared<ModulePreviewNode>(module);
-        node->setDiagramState(model_.diagram);
-        node->setWaveformSamples(model_.waveformSamples);
-        node->setOnSelected([this](FlowModule selected) {
-            // External highlight by click; knob hover will override in render().
-            model_.diagram.highlightedModule = selected;
-            layoutDirty_ = true;
+      auto makePreview = [&](FlowModule module) {
+          auto node = std::make_shared<ModulePreviewNode>(module);
+          node->setDiagramState(model_.diagram);
+          if (module == FlowModule::kExcitation) {
+              node->setWaveformSamples(model_.diagram.excitationSamples);
+          } else {
+              node->setWaveformSamples(model_.waveformSamples);
+          }
+          node->setOnSelected([this](FlowModule selected) {
+              // External highlight by click; knob hover will override in render().
+              model_.diagram.highlightedModule = selected;
+              layoutDirty_ = true;
         });
         return node;
     };
     excitationPreviewNode_ = makePreview(FlowModule::kExcitation);
     stringPreviewNode_ = makePreview(FlowModule::kString);
-    bodyPreviewNode_ = makePreview(FlowModule::kBody);
-    roomReverbPreviewNode_ = std::make_shared<RoomReverbPreviewNode>();
+    excitationWaveformSelectorNode_ =
+        excitationPreviewNode_ ? excitationPreviewNode_->waveformSelector()
+                               : nullptr;
+    roomReverbPreviewNode_ = std::make_shared<RoomReverbPreviewNode>();   
     roomReverbPreviewNode_->setDiagramState(model_.diagram);
     roomPreviewNode_ = roomReverbPreviewNode_;
     roomIrSelectorNode_ = roomReverbPreviewNode_->selector();
@@ -772,7 +776,6 @@ void Direct2DContext::rebuildLayout() {
         roomIrSelectorNode_->setPageSize(6);
     }
 
-    // Bind Excitation "Position" to an interactive slider inside the preview card.
     auto findParam = [&](FlowModule module,
                          const std::wstring& label) -> const ModuleParamDescriptor* {
         for (const auto& m : model_.modules) {
@@ -783,18 +786,28 @@ void Direct2DContext::rebuildLayout() {
         }
         return nullptr;
     };
-    if (excitationPreviewNode_) {
-        if (const auto* pos = findParam(FlowModule::kExcitation, L"Position")) {
-            excitationPreviewNode_->setPickPositionRange(pos->min, pos->max);
-            excitationPreviewNode_->setOnPickPositionChanged(
-                [setter = pos->setter](float value) {
-                    if (setter) setter(value);
-                });
-        }
-    }
-    // Bind Room "IR" param to the dropdown selector (if available).
+
+      // Bind Excitation Waveform dropdown.
+      if (excitationWaveformSelectorNode_) {
+          excitationWaveformSelectorNode_->setItems(
+              {L"Sine", L"Triangle", L"Saw", L"Square", L"Semisine"});
+          excitationWaveformSelectorNode_->setPageSize(6);
+          if (const auto* wfParam = findParam(FlowModule::kExcitation, L"Waveform")) {
+              if (wfParam->getter) {
+                  excitationWaveformSelectorNode_->setSelectedIndex(
+                      static_cast<int>(std::lround(wfParam->getter())));
+              }
+              excitationWaveformSelectorNode_->setOnChanged(
+                  [setter = wfParam->setter](int index) {
+                      if (setter) {
+                          setter(static_cast<float>(index));
+                      }
+                  });
+          }
+      }
+      // Bind Room "IR" param to the dropdown selector (if available).
     if (roomIrSelectorNode_) {
-        if (const auto* irParam = findParam(FlowModule::kRoom, L"IR")) {
+        if (const auto* irParam = findParam(FlowModule::kRoom, L"IR")) {  
             if (irParam->getter) {
                 roomIrSelectorNode_->setSelectedIndex(
                     static_cast<int>(std::lround(irParam->getter())));
@@ -808,24 +821,26 @@ void Direct2DContext::rebuildLayout() {
         }
     }
 
-    auto makeKnobs = [&](FlowModule module) {
-        auto node = std::make_shared<KnobPanelNode>();
-        // Filter modules list down to this module.
-        std::vector<ModuleUI> filtered;
-        for (const auto& m : model_.modules) {
-            if (m.module == module) {
-                // The module header is rendered by the card title bar; avoid duplicating it here.
-                ModuleUI copy = m;
-                copy.title.clear();
-                filtered.push_back(std::move(copy));
-            }
-        }
-        node->setModules(filtered, /*surfaceOnly=*/true, /*compactLayout=*/false);
-        return node;
-    };
-    excitationKnobsNode_ = makeKnobs(FlowModule::kExcitation);
+      auto makeKnobs = [&](FlowModule module) {
+          auto node = std::make_shared<KnobPanelNode>();
+          // Filter modules list down to this module.
+          std::vector<ModuleUI> filtered;
+          for (const auto& m : model_.modules) {
+              if (m.module == module) {
+                  ModuleUI copy = m;
+                  filtered.push_back(std::move(copy));
+              }
+          }
+          // If there's only one group for this module, the card title bar already
+          // communicates the module name; avoid duplicating it inside the knob panel.
+          if (filtered.size() == 1) {
+              filtered.front().title.clear();
+          }
+          node->setModules(filtered, /*surfaceOnly=*/true, /*compactLayout=*/false);
+          return node;
+      };
+    excitationKnobsNode_ = makeKnobs(FlowModule::kExcitation);        
     stringKnobsNode_ = makeKnobs(FlowModule::kString);
-    bodyKnobsNode_ = makeKnobs(FlowModule::kBody);
     roomKnobsNode_ = makeKnobs(FlowModule::kRoom);
 #if SATORI_UI_DEBUG_ENABLED
     applyDebugOverlayState();
@@ -835,19 +850,15 @@ void Direct2DContext::rebuildLayout() {
     keyboardNode_->setColors(keyboardColors_);
     keyboardNode_->setConfig(model_.keyboardConfig, model_.keyCallback);
 
-    // Four module cards aligned to the signal flow.
+    // Module cards aligned to the signal flow.
     excitationCardNode_ = std::make_shared<ModuleCardNode>(
         FlowModule::kExcitation, excitationPreviewNode_, excitationKnobsNode_);
     excitationCardNode_->setTitleBar(L"EXCITATION",
                                      textFormat_ ? textFormat_->GetFontSize() : 18.0f);
     stringCardNode_ = std::make_shared<ModuleCardNode>(
-        FlowModule::kString, stringPreviewNode_, stringKnobsNode_);
+        FlowModule::kString, stringPreviewNode_, stringKnobsNode_);       
     stringCardNode_->setTitleBar(L"STRING",
                                  textFormat_ ? textFormat_->GetFontSize() : 18.0f);
-    bodyCardNode_ = std::make_shared<ModuleCardNode>(
-        FlowModule::kBody, bodyPreviewNode_, bodyKnobsNode_);
-    bodyCardNode_->setTitleBar(L"BODY",
-                               textFormat_ ? textFormat_->GetFontSize() : 18.0f);
     roomCardNode_ = std::make_shared<ModuleCardNode>(
         FlowModule::kRoom, roomPreviewNode_, roomKnobsNode_);
     roomCardNode_->setTitleBar(L"ROOM",
@@ -855,10 +866,9 @@ void Direct2DContext::rebuildLayout() {
 
     auto mainRow = std::make_shared<UIHorizontalStack>(12.0f);
     mainRow->setItems({
-        {excitationCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
-        {stringCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
-        {bodyCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
-        {roomCardNode_, {UISizeMode::kPercent, 0.25f, 220.0f}},
+        {excitationCardNode_, {UISizeMode::kPercent, 0.3333f, 220.0f}},
+        {stringCardNode_, {UISizeMode::kPercent, 0.3333f, 220.0f}},
+        {roomCardNode_, {UISizeMode::kPercent, 0.3333f, 220.0f}},
     });
     mainRow_ = mainRow;
 
@@ -967,17 +977,12 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
         }
     }
     if (stringKnobsNode_) {
-        if (auto panel = stringKnobsNode_->debugBoxForPoint(x, y)) {
-            return panel;
-        }
-    }
-    if (bodyKnobsNode_) {
-        if (auto panel = bodyKnobsNode_->debugBoxForPoint(x, y)) {
+        if (auto panel = stringKnobsNode_->debugBoxForPoint(x, y)) {      
             return panel;
         }
     }
     if (roomKnobsNode_) {
-        if (auto panel = roomKnobsNode_->debugBoxForPoint(x, y)) {
+        if (auto panel = roomKnobsNode_->debugBoxForPoint(x, y)) {        
             return panel;
         }
     }
@@ -1005,11 +1010,6 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
             return sel;
         }
     }
-    if (bodyPreviewNode_) {
-        if (auto sel = checkNode(bodyPreviewNode_)) {
-            return sel;
-        }
-    }
     if (roomPreviewNode_) {
         if (auto sel = checkNode(roomPreviewNode_)) {
             return sel;
@@ -1029,9 +1029,9 @@ std::optional<DebugBoxModel> Direct2DContext::pickDebugSelection(float x,
 #endif
 }
 
-RenderResources Direct2DContext::makeResources() {
-    RenderResources resources;
-    resources.target = renderTarget_.Get();
+    RenderResources Direct2DContext::makeResources() {
+        RenderResources resources;
+        resources.target = renderTarget_.Get();
     resources.accentBrush = accentBrush_.Get();
     resources.excitationBrush = excitationBrush_.Get();
     resources.accentFillBrush = accentFillBrush_.Get();
@@ -1041,11 +1041,12 @@ RenderResources Direct2DContext::makeResources() {
     resources.panelBrush = panelBrush_.Get();
     resources.cardBrush = cardBrush_.Get();
     resources.shadowBrush = shadowBrush_.Get();        
-    resources.gridBrush = gridBrush_.Get();
-    resources.textFormat = textFormat_.Get();
-    resources.skinId = skinConfig_.id;
-    resources.skin = &skinResources_;
-    return resources;
-}
+        resources.gridBrush = gridBrush_.Get();
+        resources.textFormat = textFormat_.Get();
+        resources.dwriteFactory = dwriteFactory_.Get();
+        resources.skinId = skinConfig_.id;
+        resources.skin = &skinResources_;
+        return resources;
+    }
 
 }  // namespace winui

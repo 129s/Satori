@@ -21,6 +21,7 @@ struct RenderResources {
     ID2D1SolidColorBrush* shadowBrush = nullptr; // Subtle drop shadows for cards
     ID2D1SolidColorBrush* gridBrush = nullptr;
     IDWriteTextFormat* textFormat = nullptr;
+    IDWriteFactory* dwriteFactory = nullptr;
 
     // 当前使用的 UI 皮肤（只读视图，由 Direct2DContext 填充）。
     UISkinId skinId = UISkinId::kDefault;

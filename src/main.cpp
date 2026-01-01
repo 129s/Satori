@@ -24,15 +24,21 @@ struct AppConfig {
     float decay = 0.996f;
     float brightness = 0.5f;
     float dispersionAmount = 0.12f;
-    float excitationBrightness = 0.6f;
-    float excitationVelocity = 0.5f;
-    float excitationMix = 1.0f;
+    bool waveEnabled = false;
+    float waveLevel = 0.0f;
+    int waveformType = 0;
+    float waveDuty = 0.5f;
+
+    bool noiseEnabled = true;
+    float noiseLevel = 1.0f;
+    float noiseJitter = 1.0f;
+    float noiseOverdrive = 0.0f;
+    float noiseColor = 1.0f;
     float pickPosition = 0.5f;
     float bodyTone = 0.5f;
     float bodySize = 0.5f;
     float roomAmount = 0.0f;
     bool enableLowpass = true;
-    synthesis::NoiseType noiseType = synthesis::NoiseType::White;
     synthesis::ExcitationMode excitationMode =
         synthesis::ExcitationMode::RandomNoisePick;
     synthesis::ExcitationType excitationType = synthesis::ExcitationType::Pluck;
@@ -46,8 +52,10 @@ struct AppConfig {
 void printUsage() {
     std::cout << "用法: Satori [--freq 440] [--notes 440[:start[:dur]],660] [--midi song.mid] [--duration 2.0] "
                  "[--samplerate 44100] [--decay 0.996] [--brightness 0.5] "
-                 "[--dispersion 0.12] [--exciteColor 0.6] [--exciteVel 0.5] [--mix 1.0] [--pickpos 0.5] "
-                 "[--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] [--noise white|binary] "
+                 "[--dispersion 0.12] [--waveOn 0|1] [--waveLevel 0..1] [--waveform sine|triangle|saw|square|semisine] [--duty 0.01..0.99] "
+                 "[--noiseOn 0|1] [--noiseLevel 0..1] [--jitter 0..1] [--overdrive 0..1] [--color 0..1] "
+                 "[--pickpos 0.5] [--bodyTone 0.5] [--bodySize 0.5] [--room 0.0] "
+                 "[--mix 0..1] [--exciteColor 0..1] [--noise white|binary] "
                  "[--excitation random|fixed] [--exciteType pluck|hammer] [--filter lowpass|none] "
                  "[--release 0.35] [--seed 1234] [--output out.wav]\n";
 }
@@ -68,6 +76,26 @@ bool parseFloat(const std::string& value, float& dest) {
     } catch (const std::exception&) {
         return false;
     }
+}
+
+std::string toLower(std::string value);
+
+bool parseBoolish(const std::string& value, bool& dest) {
+    const auto lower = toLower(value);
+    if (lower == "1" || lower == "true" || lower == "on" || lower == "yes") {
+        dest = true;
+        return true;
+    }
+    if (lower == "0" || lower == "false" || lower == "off" || lower == "no") {
+        dest = false;
+        return true;
+    }
+    float tmp = 0.0f;
+    if (!parseFloat(value, tmp)) {
+        return false;
+    }
+    dest = tmp >= 0.5f;
+    return true;
 }
 
 std::string toLower(std::string value) {
@@ -119,13 +147,44 @@ std::vector<synthesis::NoteEvent> parseNoteList(const std::string& csv,
     return notes;
 }
 
-void parseNoise(const std::string& value, synthesis::NoiseType& dest) {
+void parseLegacyNoiseType(const std::string& value, float& destOverdrive) {
     const auto lower = toLower(value);
     if (lower == "binary") {
-        dest = synthesis::NoiseType::Binary;
+        destOverdrive = 1.0f;
     } else {
-        dest = synthesis::NoiseType::White;
+        destOverdrive = 0.0f;
     }
+}
+
+bool parseWaveformType(const std::string& value, int& dest) {
+    const auto lower = toLower(value);
+    if (lower == "sine") {
+        dest = 0;
+        return true;
+    }
+    if (lower == "triangle") {
+        dest = 1;
+        return true;
+    }
+    if (lower == "saw") {
+        dest = 2;
+        return true;
+    }
+    if (lower == "square") {
+        dest = 3;
+        return true;
+    }
+    if (lower == "semisine") {
+        dest = 4;
+        return true;
+    }
+
+    double tmp = 0.0;
+    if (!parseDouble(value, tmp)) {
+        return false;
+    }
+    dest = static_cast<int>(std::lround(tmp));
+    return true;
 }
 
 void parseExcitationMode(const std::string& value,
@@ -173,9 +232,19 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     AppConfig config;
     config.ampRelease = defaultAmpRelease();
     config.dispersionAmount = defaultDispersionAmount();
-    config.excitationBrightness = defaultValue(engine::ParamId::ExcitationBrightness, 0.6f);
-    config.excitationVelocity = defaultValue(engine::ParamId::ExcitationVelocity, 0.5f);
-    config.excitationMix = defaultValue(engine::ParamId::ExcitationMix, 1.0f);
+
+    config.waveEnabled = defaultValue(engine::ParamId::WaveEnabled, 0.0f) >= 0.5f;
+    config.waveLevel = defaultValue(engine::ParamId::WaveLevel, 0.0f);
+    config.waveformType =
+        static_cast<int>(std::lround(defaultValue(engine::ParamId::WaveformType, 0.0f)));
+    config.waveDuty = defaultValue(engine::ParamId::WaveDuty, 0.5f);
+
+    config.noiseEnabled = defaultValue(engine::ParamId::NoiseEnabled, 1.0f) >= 0.5f;
+    config.noiseLevel = defaultValue(engine::ParamId::NoiseLevel, 1.0f);
+    config.noiseJitter = defaultValue(engine::ParamId::NoiseJitter, 1.0f);
+    config.noiseOverdrive = defaultValue(engine::ParamId::NoiseOverdrive, 0.0f);
+    config.noiseColor = defaultValue(engine::ParamId::NoiseColor, 1.0f);
+
     config.bodyTone = defaultValue(engine::ParamId::BodyTone, 0.5f);
     config.bodySize = defaultValue(engine::ParamId::BodySize, 0.5f);
     config.roomAmount = defaultValue(engine::ParamId::RoomAmount, 0.0f);
@@ -214,17 +283,105 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     if (auto it = kv.find("dispersion"); it != kv.end()) {
         parseFloat(it->second, config.dispersionAmount);
     }
-    if (auto it = kv.find("exciteColor"); it != kv.end()) {
-        parseFloat(it->second, config.excitationBrightness);
+
+    bool hasWaveEnabled = false;
+    bool hasWaveLevel = false;
+    bool hasWaveform = false;
+    bool hasWaveDuty = false;
+    bool hasNoiseEnabled = false;
+    bool hasNoiseLevel = false;
+    bool hasNoiseJitter = false;
+    bool hasNoiseOverdrive = false;
+    bool hasNoiseColor = false;
+
+    if (auto it = kv.find("waveOn"); it != kv.end()) {
+        if (parseBoolish(it->second, config.waveEnabled)) {
+            hasWaveEnabled = true;
+        }
     }
-    if (auto it = kv.find("exciteVel"); it != kv.end()) {
-        parseFloat(it->second, config.excitationVelocity);
+    if (auto it = kv.find("waveLevel"); it != kv.end()) {
+        if (parseFloat(it->second, config.waveLevel)) {
+            hasWaveLevel = true;
+        }
+    }
+    if (auto it = kv.find("waveform"); it != kv.end()) {
+        if (parseWaveformType(it->second, config.waveformType)) {
+            hasWaveform = true;
+        }
+    }
+    if (auto it = kv.find("duty"); it != kv.end()) {
+        if (parseFloat(it->second, config.waveDuty)) {
+            hasWaveDuty = true;
+        }
+    }
+
+    if (auto it = kv.find("noiseOn"); it != kv.end()) {
+        if (parseBoolish(it->second, config.noiseEnabled)) {
+            hasNoiseEnabled = true;
+        }
+    }
+    if (auto it = kv.find("noiseLevel"); it != kv.end()) {
+        if (parseFloat(it->second, config.noiseLevel)) {
+            hasNoiseLevel = true;
+        }
+    }
+    if (auto it = kv.find("jitter"); it != kv.end()) {
+        if (parseFloat(it->second, config.noiseJitter)) {
+            hasNoiseJitter = true;
+        }
+    }
+    if (auto it = kv.find("overdrive"); it != kv.end()) {
+        if (parseFloat(it->second, config.noiseOverdrive)) {
+            hasNoiseOverdrive = true;
+        }
+    }
+    if (auto it = kv.find("color"); it != kv.end()) {
+        if (parseFloat(it->second, config.noiseColor)) {
+            hasNoiseColor = true;
+        }
+    }
+
+    // Legacy flags (approximate mapping).
+    if (auto it = kv.find("exciteColor"); it != kv.end()) {
+        if (!hasNoiseColor) {
+            hasNoiseColor = parseFloat(it->second, config.noiseColor);
+        }
+    }
+    if (auto it = kv.find("noise"); it != kv.end()) {
+        if (!hasNoiseOverdrive) {
+            parseLegacyNoiseType(it->second, config.noiseOverdrive);
+            hasNoiseOverdrive = true;
+        }
+        if (!hasNoiseEnabled) {
+            config.noiseEnabled = true;
+            hasNoiseEnabled = true;
+        }
     }
     if (auto it = kv.find("mix"); it != kv.end()) {
-        parseFloat(it->second, config.excitationMix);
-    }
-    if (auto it = kv.find("impulseMix"); it != kv.end()) {
-        parseFloat(it->second, config.excitationMix);
+        float legacyMix = 1.0f;
+        if (parseFloat(it->second, legacyMix) && !hasWaveLevel && !hasNoiseLevel) {
+            const float mix01 = std::clamp(legacyMix, 0.0f, 1.0f);
+            if (!hasWaveEnabled) {
+                config.waveEnabled = true;
+                hasWaveEnabled = true;
+            }
+            config.waveLevel = 1.0f - mix01;
+            hasWaveLevel = true;
+            if (!hasWaveform) {
+                config.waveformType = 4;  // Semisine
+                hasWaveform = true;
+            }
+            if (!hasNoiseEnabled) {
+                config.noiseEnabled = true;
+                hasNoiseEnabled = true;
+            }
+            config.noiseLevel = mix01;
+            hasNoiseLevel = true;
+            if (!hasNoiseJitter) {
+                config.noiseJitter = 1.0f;
+                hasNoiseJitter = true;
+            }
+        }
     }
     if (auto it = kv.find("pickpos"); it != kv.end()) {
         parseFloat(it->second, config.pickPosition);
@@ -237,9 +394,6 @@ AppConfig parseArgs(int argc, char** argv, bool& showHelp) {
     }
     if (auto it = kv.find("room"); it != kv.end()) {
         parseFloat(it->second, config.roomAmount);
-    }
-    if (auto it = kv.find("noise"); it != kv.end()) {
-        parseNoise(it->second, config.noiseType);
     }
     if (auto it = kv.find("excitation"); it != kv.end()) {
         parseExcitationMode(it->second, config.excitationMode);
@@ -361,17 +515,20 @@ int main(int argc, char** argv) {
     synthEngine.setParam(engine::ParamId::Decay, appConfig.decay);
     synthEngine.setParam(engine::ParamId::Brightness, appConfig.brightness);
     synthEngine.setParam(engine::ParamId::DispersionAmount, appConfig.dispersionAmount);
-    synthEngine.setParam(engine::ParamId::ExcitationBrightness,
-                         appConfig.excitationBrightness);
-    synthEngine.setParam(engine::ParamId::ExcitationVelocity, appConfig.excitationVelocity);
-    synthEngine.setParam(engine::ParamId::ExcitationMix, appConfig.excitationMix);
+    synthEngine.setParam(engine::ParamId::WaveEnabled, appConfig.waveEnabled ? 1.0f : 0.0f);
+    synthEngine.setParam(engine::ParamId::WaveLevel, appConfig.waveLevel);
+    synthEngine.setParam(engine::ParamId::WaveformType, static_cast<float>(appConfig.waveformType));
+    synthEngine.setParam(engine::ParamId::WaveDuty, appConfig.waveDuty);
+    synthEngine.setParam(engine::ParamId::NoiseEnabled, appConfig.noiseEnabled ? 1.0f : 0.0f);
+    synthEngine.setParam(engine::ParamId::NoiseLevel, appConfig.noiseLevel);
+    synthEngine.setParam(engine::ParamId::NoiseJitter, appConfig.noiseJitter);
+    synthEngine.setParam(engine::ParamId::NoiseOverdrive, appConfig.noiseOverdrive);
+    synthEngine.setParam(engine::ParamId::NoiseColor, appConfig.noiseColor);
     synthEngine.setParam(engine::ParamId::PickPosition, appConfig.pickPosition);
     synthEngine.setParam(engine::ParamId::BodyTone, appConfig.bodyTone);
     synthEngine.setParam(engine::ParamId::BodySize, appConfig.bodySize);
     synthEngine.setParam(engine::ParamId::RoomAmount, appConfig.roomAmount);
     synthEngine.setParam(engine::ParamId::EnableLowpass, appConfig.enableLowpass ? 1.0f : 0.0f);
-    synthEngine.setParam(engine::ParamId::NoiseType,
-                         appConfig.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f);
     synthEngine.setParam(engine::ParamId::MasterGain, 1.0f);
     synthEngine.setParam(engine::ParamId::AmpRelease, appConfig.ampRelease);
 

@@ -51,7 +51,7 @@ bool SatoriRealtimeEngine::reconfigureAudio(const AudioEngineConfig& config) {
         return false;
     }
     audioConfig_ = audioEngine_.config();
-    if (audioConfig_.backend == AudioBackendType::Asio && audioConfig_.sampleRate > 0) {
+    if (audioConfig_.sampleRate > 0) {
         synthConfig_.sampleRate = static_cast<double>(audioConfig_.sampleRate);
         synthEngine_.setSampleRate(synthConfig_.sampleRate);
     } else if (synthConfig_.sampleRate <= 0.0) {
@@ -97,7 +97,9 @@ void SatoriRealtimeEngine::panic() {
 
 void SatoriRealtimeEngine::setSynthConfig(const synthesis::StringConfig& config) {
     synthesis::StringConfig clamped = config;
-    if (clamped.sampleRate <= 0.0) {
+    if (audioConfig_.sampleRate > 0) {
+        clamped.sampleRate = static_cast<double>(audioConfig_.sampleRate);
+    } else if (clamped.sampleRate <= 0.0) {
         clamped.sampleRate = synthConfig_.sampleRate > 0.0
                                  ? synthConfig_.sampleRate
                                  : static_cast<double>(audioConfig_.sampleRate);
@@ -138,14 +140,33 @@ void SatoriRealtimeEngine::setParam(engine::ParamId id, float value) {
         case engine::ParamId::DispersionAmount:
             synthConfig_.dispersionAmount = value;
             break;
-        case engine::ParamId::ExcitationBrightness:
-            synthConfig_.excitationBrightness = value;
+        case engine::ParamId::WaveEnabled:
+            synthConfig_.waveEnabled = value >= 0.5f;
             break;
-        case engine::ParamId::ExcitationVelocity:
-            synthConfig_.excitationVelocity = value;
+        case engine::ParamId::WaveLevel:
+            synthConfig_.waveLevel = value;
             break;
-        case engine::ParamId::ExcitationMix:
-            synthConfig_.excitationMix = value;
+        case engine::ParamId::WaveformType:
+            synthConfig_.waveformType =
+                static_cast<synthesis::WaveformType>(std::lround(value));
+            break;
+        case engine::ParamId::WaveDuty:
+            synthConfig_.waveDuty = value;
+            break;
+        case engine::ParamId::NoiseEnabled:
+            synthConfig_.noiseEnabled = value >= 0.5f;
+            break;
+        case engine::ParamId::NoiseLevel:
+            synthConfig_.noiseLevel = value;
+            break;
+        case engine::ParamId::NoiseJitter:
+            synthConfig_.noiseJitter = value;
+            break;
+        case engine::ParamId::NoiseOverdrive:
+            synthConfig_.noiseOverdrive = value;
+            break;
+        case engine::ParamId::NoiseColor:
+            synthConfig_.noiseColor = value;
             break;
         case engine::ParamId::BodyTone:
             synthConfig_.bodyTone = value;
@@ -164,10 +185,6 @@ void SatoriRealtimeEngine::setParam(engine::ParamId id, float value) {
             break;
         case engine::ParamId::EnableLowpass:
             synthConfig_.enableLowpass = value >= 0.5f;
-            break;
-        case engine::ParamId::NoiseType:
-            synthConfig_.noiseType =
-                (value >= 0.5f) ? synthesis::NoiseType::Binary : synthesis::NoiseType::White;
             break;
         case engine::ParamId::MasterGain:
             masterGain_ = value;
@@ -191,12 +208,24 @@ float SatoriRealtimeEngine::getParam(engine::ParamId id) const {
             return synthConfig_.brightness;
         case engine::ParamId::DispersionAmount:
             return synthConfig_.dispersionAmount;
-        case engine::ParamId::ExcitationBrightness:
-            return synthConfig_.excitationBrightness;
-        case engine::ParamId::ExcitationVelocity:
-            return synthConfig_.excitationVelocity;
-        case engine::ParamId::ExcitationMix:
-            return synthConfig_.excitationMix;
+        case engine::ParamId::WaveEnabled:
+            return synthConfig_.waveEnabled ? 1.0f : 0.0f;
+        case engine::ParamId::WaveLevel:
+            return synthConfig_.waveLevel;
+        case engine::ParamId::WaveformType:
+            return static_cast<float>(synthConfig_.waveformType);
+        case engine::ParamId::WaveDuty:
+            return synthConfig_.waveDuty;
+        case engine::ParamId::NoiseEnabled:
+            return synthConfig_.noiseEnabled ? 1.0f : 0.0f;
+        case engine::ParamId::NoiseLevel:
+            return synthConfig_.noiseLevel;
+        case engine::ParamId::NoiseJitter:
+            return synthConfig_.noiseJitter;
+        case engine::ParamId::NoiseOverdrive:
+            return synthConfig_.noiseOverdrive;
+        case engine::ParamId::NoiseColor:
+            return synthConfig_.noiseColor;
         case engine::ParamId::BodyTone:
             return synthConfig_.bodyTone;
         case engine::ParamId::BodySize:
@@ -209,8 +238,6 @@ float SatoriRealtimeEngine::getParam(engine::ParamId id) const {
             return synthConfig_.pickPosition;
         case engine::ParamId::EnableLowpass:
             return synthConfig_.enableLowpass ? 1.0f : 0.0f;
-        case engine::ParamId::NoiseType:
-            return synthConfig_.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f;
         case engine::ParamId::MasterGain:
             return masterGain_;
         case engine::ParamId::AmpRelease:

@@ -100,11 +100,13 @@ void InitializeKeyBindings() {
         winui::MakeKeyboardKeymap(kBaseMidiNote, kDefaultOctaveCount);
 }
 
-void LogTriggeredFrequency(int midiNote, double frequency, bool pressed) {
+void LogTriggeredFrequency(int midiNote, double frequency, bool pressed,
+                           float velocity) {
     const auto& label = g_keyboard.lastTriggeredLabel();
     wchar_t buffer[160];
-    swprintf_s(buffer, L"[KeyboardSandbox] %s (MIDI %d) - %.2f Hz %s\n", label.c_str(),
-               midiNote, frequency, pressed ? L"on" : L"off");
+    swprintf_s(buffer, L"[KeyboardSandbox] %s (MIDI %d) - %.2f Hz %s vel=%.2f\n",
+               label.c_str(), midiNote, frequency, pressed ? L"on" : L"off",
+               velocity);
     OutputDebugStringW(buffer);
 }
 

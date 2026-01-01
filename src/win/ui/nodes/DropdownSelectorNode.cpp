@@ -1,14 +1,124 @@
 #include "win/ui/nodes/DropdownSelectorNode.h"
 
 #include <algorithm>
+#include <string_view>
 
 #include <d2d1helper.h>
+#include <wrl/client.h>
 
 namespace winui {
 
 namespace {
 float RectWidth(const D2D1_RECT_F& r) { return r.right - r.left; }
 float RectHeight(const D2D1_RECT_F& r) { return r.bottom - r.top; }
+
+std::wstring ToSingleLine(std::wstring_view text) {
+    std::wstring out;
+    out.reserve(text.size());
+    bool lastSpace = true;
+    for (wchar_t ch : text) {
+        if (ch == L'\r' || ch == L'\n' || ch == L'\t') {
+            ch = L' ';
+        }
+        const bool isSpace = ch == L' ';
+        if (isSpace) {
+            if (lastSpace) {
+                continue;
+            }
+            lastSpace = true;
+        } else {
+            lastSpace = false;
+        }
+        out.push_back(ch);
+    }
+    while (!out.empty() && out.front() == L' ') {
+        out.erase(out.begin());
+    }
+    while (!out.empty() && out.back() == L' ') {
+        out.pop_back();
+    }
+    return out;
+}
+
+void DrawSingleLineEllipsized(const RenderResources& resources,
+                              std::wstring_view text, const D2D1_RECT_F& rect,
+                              ID2D1Brush* brush,
+                              DWRITE_TEXT_ALIGNMENT alignment) {
+    if (!resources.target || !resources.textFormat || !brush) {
+        return;
+    }
+
+    const float w = std::max(0.0f, RectWidth(rect));
+    const float h = std::max(0.0f, RectHeight(rect));
+    if (w <= 1.0f || h <= 1.0f) {
+        return;
+    }
+
+    std::wstring line = ToSingleLine(text);
+    if (line.empty()) {
+        return;
+    }
+
+    auto drawFallback = [&]() {
+        const std::size_t maxChars =
+            static_cast<std::size_t>(std::max(1.0f, w / 8.0f));
+        if (line.size() > maxChars) {
+            if (maxChars <= 1) {
+                line = L"…";
+            } else {
+                line = line.substr(0, maxChars - 1) + L"…";
+            }
+        }
+
+        resources.target->PushAxisAlignedClip(rect,
+                                             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        const auto oldText = resources.textFormat->GetTextAlignment();
+        const auto oldPara = resources.textFormat->GetParagraphAlignment();
+        (void)resources.textFormat->SetTextAlignment(alignment);
+        (void)resources.textFormat->SetParagraphAlignment(
+            DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        resources.target->DrawText(line.c_str(), static_cast<UINT32>(line.size()),
+                                   resources.textFormat, rect, brush);
+        (void)resources.textFormat->SetTextAlignment(oldText);
+        (void)resources.textFormat->SetParagraphAlignment(oldPara);
+        resources.target->PopAxisAlignedClip();
+    };
+
+    if (!resources.dwriteFactory) {
+        drawFallback();
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(resources.dwriteFactory->CreateTextLayout(
+            line.c_str(), static_cast<UINT32>(line.size()), resources.textFormat,
+            w, h, &layout)) ||
+        !layout) {
+        drawFallback();
+        return;
+    }
+
+    (void)layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    (void)layout->SetTextAlignment(alignment);
+    (void)layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    DWRITE_TRIMMING trimming{};
+    trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+
+    Microsoft::WRL::ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(resources.dwriteFactory->CreateEllipsisTrimmingSign(
+            resources.textFormat, &ellipsis)) &&
+        ellipsis) {
+        (void)layout->SetTrimming(&trimming, ellipsis.Get());
+    }
+
+    resources.target->PushAxisAlignedClip(rect,
+                                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    resources.target->DrawTextLayout(D2D1::Point2F(rect.left, rect.top),
+                                     layout.Get(), brush,
+                                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    resources.target->PopAxisAlignedClip();
+}
 
 struct TextAlignmentGuard {
     explicit TextAlignmentGuard(IDWriteTextFormat* format,
@@ -69,6 +179,9 @@ std::wstring DropdownSelectorNode::selectedLabel() const {
 
 void DropdownSelectorNode::setOnChanged(std::function<void(int)> onChanged) {
     onChanged_ = std::move(onChanged);
+    if (!onChanged_) {
+        close();
+    }
 }
 
 void DropdownSelectorNode::setPageSize(int pageSize) {
@@ -170,6 +283,12 @@ void DropdownSelectorNode::draw(const RenderResources& resources) {
         return;
     }
 
+    const bool enabled = static_cast<bool>(onChanged_);
+    const float originalOpacity = text->GetOpacity();
+    if (!enabled) {
+        text->SetOpacity(originalOpacity * 0.45f);
+    }
+
     // Base box.
     resources.target->FillRectangle(bounds_, bg);
 
@@ -202,14 +321,14 @@ void DropdownSelectorNode::draw(const RenderResources& resources) {
     drawArrow(rightArrow, false);
 
     // Label.
-    const std::wstring label = selectedLabel();
-    const auto textRect =
-        D2D1::RectF(labelRect.left + padding_, labelRect.top, labelRect.right - padding_,
-                    labelRect.bottom);
-    const TextAlignmentGuard align(resources.textFormat, DWRITE_TEXT_ALIGNMENT_CENTER,
-                                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    resources.target->DrawText(label.c_str(), static_cast<UINT32>(label.size()),
-                               resources.textFormat, textRect, text);
+        const std::wstring label = selectedLabel();
+        const auto textRect =
+            D2D1::RectF(labelRect.left + padding_, labelRect.top, labelRect.right - padding_,
+                        labelRect.bottom);
+        DrawSingleLineEllipsized(resources, label, textRect, text,
+                                 DWRITE_TEXT_ALIGNMENT_CENTER);
+
+    text->SetOpacity(originalOpacity);
 }
 
 void DropdownSelectorNode::drawOverlay(const RenderResources& resources) {
@@ -254,10 +373,9 @@ void DropdownSelectorNode::drawOverlay(const RenderResources& resources) {
         const auto tr = D2D1::RectF(rowRect.left + padding_, rowRect.top + 2.0f,
                                     rowRect.right - padding_, rowRect.bottom - 2.0f);
         const auto& name = items_[static_cast<std::size_t>(idx)];
-        resources.target->DrawText(name.c_str(), static_cast<UINT32>(name.size()),
-                                   resources.textFormat, tr,
-                                   selected ? accent : text);
-    }
+        DrawSingleLineEllipsized(resources, name, tr, selected ? accent : text,
+                                 DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
 
     // Page controls (paginated list; no scrolling).
     const auto prev = prevPageRect();
@@ -287,6 +405,9 @@ void DropdownSelectorNode::drawOverlay(const RenderResources& resources) {
 bool DropdownSelectorNode::onPointerDown(float x, float y) {
     if (!hit(bounds_, x, y)) {
         return false;
+    }
+    if (!onChanged_) {
+        return true;
     }
     if (items_.empty()) {
         return true;

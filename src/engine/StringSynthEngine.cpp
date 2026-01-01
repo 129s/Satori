@@ -87,7 +87,7 @@ public:
         const float keyTrack =
             static_cast<float>(std::clamp(std::log2(ratio), -3.0, 3.0));
 
-        const float amp = 0.45f + 0.65f * v;
+        const float amp = v;
 
         auto clampParam = [](ParamId id, float value) {
             if (const auto* info = GetParamInfo(id)) {
@@ -101,7 +101,7 @@ public:
             clampParam(ParamId::Brightness, out.brightness + brightnessDelta);
 
         const float decayDelta = -0.022f * (v - 0.5f) - 0.012f * keyTrack;
-        out.decay = clampParam(ParamId::Decay, out.decay + decayDelta);
+        out.decay = clampParam(ParamId::Decay, out.decay + decayDelta);   
 
         return amp;
     }
@@ -762,7 +762,6 @@ struct Voice {
     AmpEnvelope envelope;
     int noteId = -1;
     double frequency = 0.0;
-    float velocity = 1.0f;
     std::uint64_t age = 0;
     float energy = 0.0f;
 };
@@ -807,6 +806,11 @@ public:
         if (frequency <= 0.0) {
             return;
         }
+        velocity = std::clamp(velocity, 0.0f, 1.0f);
+        if (velocity <= 0.0f) {
+            noteOff(noteId);
+            return;
+        }
         Voice* voice = findVoiceByNote(noteId);
         if (!voice) {
             voice = allocateVoice();
@@ -816,7 +820,6 @@ public:
         }
         voice->noteId = noteId;
         voice->frequency = frequency;
-        voice->velocity = velocity;
         voice->age = ++ageCounter_;
         voice->energy = 0.0f;
 
@@ -856,9 +859,9 @@ public:
                 continue;
             }
             const float env = voice.envelope.next();
-            const float sample = voice.string.processSample() * env * voice.velocity;
+            const float sample = voice.string.processSample() * env;
             voice.energy = kEnergyDecay * voice.energy +
-                           (1.0f - kEnergyDecay) * std::abs(sample);
+                           (1.0f - kEnergyDecay) * std::abs(sample);      
             mixed += sample;
         }
 
@@ -924,7 +927,7 @@ private:
     std::uint64_t ageCounter_ = 0;
 };
 
-StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
+StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)      
     : config_(config) {
     if (const auto* info = GetParamInfo(ParamId::AmpRelease)) {
         ampReleaseSeconds_ = info->defaultValue;
@@ -932,9 +935,6 @@ StringSynthEngine::StringSynthEngine(synthesis::StringConfig config)
     voiceManager_ = std::make_unique<VoiceManager>(
         kMaxVoices, config_.sampleRate, kDefaultAttackSeconds, ampReleaseSeconds_);
     voiceManager_->setReleaseSeconds(ampReleaseSeconds_);
-    bodyFilter_ = std::make_unique<BodyFilter>();
-    bodyFilter_->setSampleRate(config_.sampleRate);
-    bodyFilter_->setParams(config_.bodyTone, config_.bodySize);
     roomProcessor_ = std::make_unique<RoomProcessor>();
     roomProcessor_->setSampleRate(config_.sampleRate);
     roomProcessor_->setMix(config_.roomAmount);
@@ -954,12 +954,18 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::Brightness, config.brightness, config_, masterGain_);
     applyParamUnlocked(ParamId::DispersionAmount, config.dispersionAmount, config_,
                        masterGain_);
-    applyParamUnlocked(ParamId::ExcitationBrightness, config.excitationBrightness, config_,
+    applyParamUnlocked(ParamId::WaveEnabled, config.waveEnabled ? 1.0f : 0.0f, config_,
                        masterGain_);
-    applyParamUnlocked(ParamId::ExcitationVelocity, config.excitationVelocity, config_,
-                       masterGain_);
-    applyParamUnlocked(ParamId::ExcitationMix, config.excitationMix, config_,
-                       masterGain_);
+    applyParamUnlocked(ParamId::WaveLevel, config.waveLevel, config_, masterGain_);
+    applyParamUnlocked(ParamId::WaveformType, static_cast<float>(config.waveformType),
+                       config_, masterGain_);
+    applyParamUnlocked(ParamId::WaveDuty, config.waveDuty, config_, masterGain_);
+    applyParamUnlocked(ParamId::NoiseEnabled, config.noiseEnabled ? 1.0f : 0.0f,
+                       config_, masterGain_);
+    applyParamUnlocked(ParamId::NoiseLevel, config.noiseLevel, config_, masterGain_);
+    applyParamUnlocked(ParamId::NoiseJitter, config.noiseJitter, config_, masterGain_);
+    applyParamUnlocked(ParamId::NoiseOverdrive, config.noiseOverdrive, config_, masterGain_);
+    applyParamUnlocked(ParamId::NoiseColor, config.noiseColor, config_, masterGain_);
     applyParamUnlocked(ParamId::BodyTone, config.bodyTone, config_, masterGain_);
     applyParamUnlocked(ParamId::BodySize, config.bodySize, config_, masterGain_);
     applyParamUnlocked(ParamId::RoomAmount, config.roomAmount, config_, masterGain_);
@@ -968,13 +974,7 @@ void StringSynthEngine::setConfig(const synthesis::StringConfig& config) {
     applyParamUnlocked(ParamId::PickPosition, config.pickPosition, config_, masterGain_);
     applyParamUnlocked(ParamId::EnableLowpass, config.enableLowpass ? 1.0f : 0.0f,
                        config_, masterGain_);
-    applyParamUnlocked(ParamId::NoiseType,
-                       config.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f,
-                       config_, masterGain_);
     voiceManager_->setSampleRate(config_.sampleRate);
-    if (bodyFilter_) {
-        bodyFilter_->setSampleRate(config_.sampleRate);
-    }
     if (roomProcessor_) {
         roomProcessor_->setSampleRate(config_.sampleRate);
         roomProcessor_->setIrIndex(config_.roomIrIndex);
@@ -991,9 +991,6 @@ void StringSynthEngine::setSampleRate(double sampleRate) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.sampleRate = sampleRate;
     voiceManager_->setSampleRate(config_.sampleRate);
-    if (bodyFilter_) {
-        bodyFilter_->setSampleRate(config_.sampleRate);
-    }
     if (roomProcessor_) {
         roomProcessor_->setSampleRate(config_.sampleRate);
     }
@@ -1083,12 +1080,24 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.brightness;
         case ParamId::DispersionAmount:
             return config_.dispersionAmount;
-        case ParamId::ExcitationBrightness:
-            return config_.excitationBrightness;
-        case ParamId::ExcitationVelocity:
-            return config_.excitationVelocity;
-        case ParamId::ExcitationMix:
-            return config_.excitationMix;
+        case ParamId::WaveEnabled:
+            return config_.waveEnabled ? 1.0f : 0.0f;
+        case ParamId::WaveLevel:
+            return config_.waveLevel;
+        case ParamId::WaveformType:
+            return static_cast<float>(config_.waveformType);
+        case ParamId::WaveDuty:
+            return config_.waveDuty;
+        case ParamId::NoiseEnabled:
+            return config_.noiseEnabled ? 1.0f : 0.0f;
+        case ParamId::NoiseLevel:
+            return config_.noiseLevel;
+        case ParamId::NoiseJitter:
+            return config_.noiseJitter;
+        case ParamId::NoiseOverdrive:
+            return config_.noiseOverdrive;
+        case ParamId::NoiseColor:
+            return config_.noiseColor;
         case ParamId::BodyTone:
             return config_.bodyTone;
         case ParamId::BodySize:
@@ -1101,8 +1110,6 @@ float StringSynthEngine::getParam(ParamId id) const {
             return config_.pickPosition;
         case ParamId::EnableLowpass:
             return config_.enableLowpass ? 1.0f : 0.0f;
-        case ParamId::NoiseType:
-            return config_.noiseType == synthesis::NoiseType::Binary ? 1.0f : 0.0f;
         case ParamId::MasterGain:
             return masterGain_;
         case ParamId::AmpRelease:
@@ -1199,10 +1206,7 @@ void StringSynthEngine::process(const ProcessBlock& block) {
             ++eventIndex;
         }
 
-        float sample = voiceManager_->renderFrame(currentMasterGain);
-        if (bodyFilter_) {
-            sample = bodyFilter_->process(sample);
-        }
+        float sample = voiceManager_->renderFrame(currentMasterGain);     
         float left = sample;
         float right = sample;
         if (roomProcessor_) {
@@ -1316,14 +1320,33 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
         case ParamId::DispersionAmount:
             config.dispersionAmount = clamped;
             break;
-        case ParamId::ExcitationBrightness:
-            config.excitationBrightness = clamped;
+        case ParamId::WaveEnabled:
+            config.waveEnabled = clamped >= 0.5f;
             break;
-        case ParamId::ExcitationVelocity:
-            config.excitationVelocity = clamped;
+        case ParamId::WaveLevel:
+            config.waveLevel = clamped;
             break;
-        case ParamId::ExcitationMix:
-            config.excitationMix = clamped;
+        case ParamId::WaveformType:
+            config.waveformType =
+                static_cast<synthesis::WaveformType>(std::lround(clamped));
+            break;
+        case ParamId::WaveDuty:
+            config.waveDuty = clamped;
+            break;
+        case ParamId::NoiseEnabled:
+            config.noiseEnabled = clamped >= 0.5f;
+            break;
+        case ParamId::NoiseLevel:
+            config.noiseLevel = clamped;
+            break;
+        case ParamId::NoiseJitter:
+            config.noiseJitter = clamped;
+            break;
+        case ParamId::NoiseOverdrive:
+            config.noiseOverdrive = clamped;
+            break;
+        case ParamId::NoiseColor:
+            config.noiseColor = clamped;
             break;
         case ParamId::BodyTone:
             config.bodyTone = clamped;
@@ -1354,10 +1377,6 @@ void StringSynthEngine::applyParamUnlocked(ParamId id, float value,
             break;
         case ParamId::EnableLowpass:
             config.enableLowpass = clamped >= 0.5f;
-            break;
-        case ParamId::NoiseType:
-            config.noiseType =
-                (clamped >= 0.5f) ? synthesis::NoiseType::Binary : synthesis::NoiseType::White;
             break;
         case ParamId::MasterGain:
             masterGain = clamped;

@@ -54,7 +54,7 @@ TEST_CASE("SatoriRealtimeEngine 支持触发音符", "[realtime-engine]") {
     engine.shutdown();
 }
 
-TEST_CASE("SatoriRealtimeEngine 支持更改工作采样率", "[realtime-engine]") {
+TEST_CASE("SatoriRealtimeEngine 在 WASAPI 下采样率跟随设备", "[realtime-engine]") {
     ScopedCOM com;
     winaudio::SatoriRealtimeEngine engine;
     REQUIRE(engine.initialize());
@@ -68,8 +68,8 @@ TEST_CASE("SatoriRealtimeEngine 支持更改工作采样率", "[realtime-engine]
     engine.setSynthConfig(alteredConfig);
 
     const auto& syncedConfig = engine.synthConfig();
-    REQUIRE(syncedConfig.sampleRate == Catch::Approx(alteredConfig.sampleRate));
-    REQUIRE(syncedConfig.decay == Catch::Approx(alteredConfig.decay));
+    REQUIRE(syncedConfig.sampleRate == Catch::Approx(deviceSampleRate));
+    REQUIRE(syncedConfig.decay == Catch::Approx(alteredConfig.decay));    
 }
 
 TEST_CASE("StringSynthEngine 处理 NoteOn 并耗尽 voice", "[engine]") {

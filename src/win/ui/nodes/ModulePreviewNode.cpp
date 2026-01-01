@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
 
 #include <d2d1helper.h>
 #include <wrl/client.h>
+
+#include "win/ui/nodes/DropdownSelectorNode.h"
 
 namespace winui {
 
@@ -15,11 +18,18 @@ bool ContainsPoint(const D2D1_RECT_F& rect, float x, float y) {
 
 }  // namespace
 
-ModulePreviewNode::ModulePreviewNode(FlowModule module) : module_(module) {}
-
-void ModulePreviewNode::setDiagramState(const FlowDiagramState& state) {
-    state_ = state;
+ModulePreviewNode::ModulePreviewNode(FlowModule module) : module_(module) {
+    if (module_ == FlowModule::kExcitation) {
+        waveformSelector_ = std::make_shared<DropdownSelectorNode>();
+    }
 }
+
+void ModulePreviewNode::setDiagramState(const FlowDiagramState& state) {        
+    state_ = state;
+    if (module_ == FlowModule::kExcitation && waveformSelector_) {
+        waveformSelector_->setSelectedIndex(state_.waveformType);
+    }
+} 
 
 void ModulePreviewNode::setWaveformSamples(const std::vector<float>& samples) {
     waveformView_.setSamples(samples);
@@ -49,6 +59,30 @@ float ModulePreviewNode::preferredHeight(float) const {
     return 260.0f;
 }
 
+void ModulePreviewNode::arrange(const D2D1_RECT_F& bounds) {
+    UILayoutNode::arrange(bounds);
+    excitationSelectorRect_ = D2D1::RectF(0, 0, 0, 0);
+    excitationScopeRect_ = D2D1::RectF(0, 0, 0, 0);
+    if (module_ == FlowModule::kExcitation) {
+        const auto viz = computeVizRect();
+        const float w = viz.right - viz.left;
+        const float h = viz.bottom - viz.top;
+        if (w > 0.0f && h > 0.0f) {
+            constexpr float dropdownH = 28.0f;
+            constexpr float gap = 6.0f;
+            excitationSelectorRect_ =
+                D2D1::RectF(viz.left, viz.top, viz.right,
+                            std::min(viz.bottom, viz.top + dropdownH));
+            excitationScopeRect_ = D2D1::RectF(
+                viz.left, std::min(viz.bottom, excitationSelectorRect_.bottom + gap),
+                viz.right, viz.bottom);
+            if (waveformSelector_) {
+                waveformSelector_->arrange(excitationSelectorRect_);
+            }
+        }
+    }
+}
+
 void ModulePreviewNode::draw(const RenderResources& resources) {
     if (!resources.target) {
         return;
@@ -75,6 +109,7 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
 
     switch (module_) {
         case FlowModule::kExcitation: {
+            const auto scopeRect = excitationScopeRect_;
             // Transient scope (already normalized in FlowDiagramNode; do it here again for safety).
             const auto& samples = state_.excitationSamples;
             ID2D1SolidColorBrush* scopeBrush =
@@ -82,22 +117,22 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
                     ? resources.excitationBrush
                     : (resources.accentBrush ? resources.accentBrush : resources.gridBrush);
             if (scopeBrush && samples.size() >= 2) {
-                const float w = vizRect.right - vizRect.left;
-                const float h = vizRect.bottom - vizRect.top;
+                const float w = scopeRect.right - scopeRect.left;
+                const float h = scopeRect.bottom - scopeRect.top;
                 if (w > 0.0f && h > 0.0f) {
                     float peak = 0.0f;
                     for (float s : samples) {
                         peak = std::max(peak, std::abs(s));
                     }
                     const float invPeak = peak > 1e-4f ? (1.0f / peak) : 1.0f;
-                    const float midY = vizRect.top + h * 0.5f;
+                    const float midY = scopeRect.top + h * 0.5f;
                     const float scaleY = h * 0.45f;
                     const float step = w / static_cast<float>(samples.size() - 1);
 
                     std::vector<D2D1_POINT_2F> points;
                     points.reserve(samples.size());
                     for (std::size_t i = 0; i < samples.size(); ++i) {
-                        const float x = vizRect.left + step * static_cast<float>(i);
+                        const float x = scopeRect.left + step * static_cast<float>(i);
                         const float y =
                             midY -
                             std::clamp(samples[i] * invPeak, -1.0f, 1.0f) * scaleY;
@@ -127,9 +162,9 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
                                     const float originalOpacity =
                                         resources.accentFillBrush->GetOpacity();
                                     resources.accentFillBrush->SetStartPoint(
-                                        D2D1::Point2F(0.0f, vizRect.top));
+                                        D2D1::Point2F(0.0f, scopeRect.top));
                                     resources.accentFillBrush->SetEndPoint(
-                                        D2D1::Point2F(0.0f, vizRect.bottom));
+                                        D2D1::Point2F(0.0f, scopeRect.bottom));
                                     resources.accentFillBrush->SetOpacity(
                                         highlighted_ ? 1.0f : 0.75f);
                                     resources.target->FillGeometry(geometry.Get(),
@@ -157,84 +192,188 @@ void ModulePreviewNode::draw(const RenderResources& resources) {
                 }
             }
 
-            // Position slider: a "string" track + pick handle.
-            const float y = vizRect.bottom - 18.0f;
-            ID2D1SolidColorBrush* trackBrush =
-                resources.gridBrush ? resources.gridBrush : resources.trackBrush;
-            if (trackBrush) {
-                const float original = trackBrush->GetOpacity();
-                trackBrush->SetOpacity(0.55f);
-                resources.target->DrawLine(D2D1::Point2F(vizRect.left, y),
-                                           D2D1::Point2F(vizRect.right, y),
-                                           trackBrush,
-                                           highlighted_ ? 2.0f : 1.6f);
-                trackBrush->SetOpacity(original);
-            }
-            if (resources.accentBrush) {
-                const float range = std::max(1e-4f, pickMax_ - pickMin_);
-                const float pos01 =
-                    std::clamp((state_.pickPosition - pickMin_) / range, 0.0f, 1.0f);
-                const float x =
-                    vizRect.left + (vizRect.right - vizRect.left) * pos01;
-                const float handleR = highlighted_ ? 6.0f : 5.0f;
-                resources.target->FillEllipse(
-                    D2D1::Ellipse(D2D1::Point2F(x, y), handleR, handleR),
-                    resources.accentBrush);
-                resources.target->DrawLine(D2D1::Point2F(x, y - 7.0f),
-                                           D2D1::Point2F(x, y + 7.0f),
-                                           resources.accentBrush,
-                                           highlighted_ ? 2.4f : 2.0f);
+            if (waveformSelector_) {
+                waveformSelector_->draw(resources);
             }
             break;
-        }
-        case FlowModule::kString: {
-            if (resources.accentBrush) {
-                // Thin-line spectrum style (instrument-like, not chunky debug bars).
-                const float w = vizRect.right - vizRect.left;
-                const float h = vizRect.bottom - vizRect.top;
-                if (w > 0.0f && h > 0.0f) {
-                    const int lineCount = 36;
-                    const float step = w / static_cast<float>(std::max(1, lineCount - 1));
+          }
+          case FlowModule::kString: {
+              if (!resources.accentBrush) {
+                  break;
+              }
 
-                    const float decay01 =
-                        (std::clamp(state_.decay, 0.90f, 0.999f) - 0.90f) / (0.999f - 0.90f);
-                    const float brightness = std::clamp(state_.brightness, 0.0f, 1.0f);
-                    const float dispersion = std::clamp(state_.dispersionAmount, 0.0f, 1.0f);
+              const float w = vizRect.right - vizRect.left;
+              const float h = vizRect.bottom - vizRect.top;
+              if (w <= 12.0f || h <= 12.0f) {
+                  break;
+              }
 
-                    const float originalOpacity = resources.accentBrush->GetOpacity();
-                    resources.accentBrush->SetOpacity(highlighted_ ? 0.90f : 0.70f);
+              // Schematic only: DELAY (top), then DECAY -> LOWPASS -> ALLPASS (bottom).
+              const float decay01 =
+                  (std::clamp(state_.decay, 0.90f, 0.999f) - 0.90f) / (0.999f - 0.90f);
 
-                    for (int i = 0; i < lineCount; ++i) {
-                        const float t =
-                            static_cast<float>(i) / static_cast<float>(std::max(1, lineCount - 1));
-                        const float harmonic = static_cast<float>(i) + 1.0f;
+              ID2D1SolidColorBrush* outlineBrush =
+                  resources.gridBrush ? resources.gridBrush : resources.accentBrush;
+              ID2D1SolidColorBrush* labelBrush =
+                  resources.textBrush ? resources.textBrush : outlineBrush;
 
-                        // Simple, deterministic "harmonic" envelope controlled by key string params.
-                        const float rolloff =
-                            0.06f + (1.0f - brightness) * 0.08f;
-                        float amp = std::exp(-harmonic * rolloff);
-                        amp *= 0.45f + 0.55f * decay01;
-                        amp *= 0.35f + 0.65f * brightness;
+              const float wireThickness = highlighted_ ? 1.9f : 1.4f;
+              const float outlineThickness = highlighted_ ? 1.6f : 1.2f;
+              constexpr float corner = 6.0f;
 
-                        // Dispersion introduces mild comb-like ripples.
-                        const float ripple =
-                            1.0f - 0.25f * dispersion +
-                            0.25f * std::sin((t * 18.0f + dispersion * 2.0f) * 6.2831853f) * dispersion;
-                        amp *= std::clamp(ripple, 0.2f, 1.2f);
-                        amp = std::clamp(amp, 0.0f, 1.0f);
+              auto drawMidArrow = [&](const D2D1_POINT_2F& from, const D2D1_POINT_2F& to,
+                                      float opacity) {
+                  if (!resources.accentBrush) {
+                      return;
+                  }
+                  const float original = resources.accentBrush->GetOpacity();
+                  resources.accentBrush->SetOpacity(opacity);
+                  resources.target->DrawLine(from, to, resources.accentBrush, wireThickness);
 
-                        const float lineH = h * (0.10f + 0.85f * amp);
-                        const float x = vizRect.left + step * static_cast<float>(i);
-                        resources.target->DrawLine(D2D1::Point2F(x, vizRect.bottom),
-                                                   D2D1::Point2F(x, vizRect.bottom - lineH),
-                                                   resources.accentBrush, 1.0f);
-                    }
+                  const D2D1_POINT_2F mid{(from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f};
+                  const float angle = std::atan2(to.y - from.y, to.x - from.x);
+                  const float len = 6.0f;
+                  const float spread = 0.55f;
+                  const float a1 = angle + 3.1415926f + spread;
+                  const float a2 = angle + 3.1415926f - spread;
+                  const D2D1_POINT_2F p1{mid.x + std::cos(a1) * len, mid.y + std::sin(a1) * len};
+                  const D2D1_POINT_2F p2{mid.x + std::cos(a2) * len, mid.y + std::sin(a2) * len};
+                  resources.target->DrawLine(mid, p1, resources.accentBrush, wireThickness);
+                  resources.target->DrawLine(mid, p2, resources.accentBrush, wireThickness);
 
-                    resources.accentBrush->SetOpacity(originalOpacity);
-                }
+                  resources.accentBrush->SetOpacity(original);
+              };
+
+              auto drawLabel = [&](const std::wstring& text, const D2D1_RECT_F& r,
+                                   float opacity) {
+                  if (!resources.textFormat || !labelBrush) {
+                      return;
+                  }
+
+                  const float originalOpacity = labelBrush->GetOpacity();
+                  labelBrush->SetOpacity(opacity);
+
+                  if (resources.dwriteFactory) {
+                      const float w = std::max(1.0f, r.right - r.left);
+                      const float h = std::max(1.0f, r.bottom - r.top);
+                      Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+                      if (SUCCEEDED(resources.dwriteFactory->CreateTextLayout(
+                              text.c_str(), static_cast<UINT32>(text.size()),
+                              resources.textFormat, w, h, &layout)) &&
+                          layout) {
+                          (void)layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                          (void)layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                          (void)layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                          resources.target->DrawTextLayout(D2D1::Point2F(r.left, r.top),
+                                                           layout.Get(), labelBrush,
+                                                           D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                          labelBrush->SetOpacity(originalOpacity);
+                          return;
+                      }
+                  }
+
+                  resources.target->DrawText(text.c_str(), static_cast<UINT32>(text.size()),
+                                             resources.textFormat, r, labelBrush);
+                  labelBrush->SetOpacity(originalOpacity);
+              };
+
+                const float padX = 6.0f;
+                const float padY = 6.0f;
+                const float gapX = std::clamp(w * 0.03f, 6.0f, 10.0f);
+                const float gapY = std::clamp(h * 0.12f, 16.0f, 22.0f);
+                const auto inner = D2D1::RectF(vizRect.left + padX, vizRect.top + padY,
+                                              vizRect.right - padX, vizRect.bottom - padY);
+                const float innerW = std::max(1.0f, inner.right - inner.left);
+                const float innerH = std::max(1.0f, inner.bottom - inner.top);
+
+                const float delayH = std::clamp(innerH * 0.28f, 20.0f, 30.0f);
+                const D2D1_RECT_F delayRect =
+                    D2D1::RectF(inner.left, inner.top, inner.right, inner.top + delayH);
+
+                float rowY = inner.bottom - std::clamp(innerH * 0.26f, 18.0f, 26.0f);
+                const float blockH = std::clamp(innerH * 0.26f, 18.0f, 26.0f);
+                rowY = std::clamp(rowY, delayRect.bottom + gapY, inner.bottom - blockH);
+                const float blockW =
+                    std::max(1.0f, (innerW - 2.0f * gapX) / 3.0f);
+
+              const D2D1_RECT_F decayRect =
+                  D2D1::RectF(inner.left, rowY, inner.left + blockW, rowY + blockH);
+              const D2D1_RECT_F lowpassRect =
+                  D2D1::RectF(decayRect.right + gapX, rowY, decayRect.right + gapX + blockW,
+                              rowY + blockH);
+              const D2D1_RECT_F allpassRect =
+                  D2D1::RectF(lowpassRect.right + gapX, rowY,
+                              lowpassRect.right + gapX + blockW, rowY + blockH);
+
+              auto centerBottom = [](const D2D1_RECT_F& r) {
+                  return D2D1::Point2F((r.left + r.right) * 0.5f, r.bottom);
+              };
+              auto centerTop = [](const D2D1_RECT_F& r) {
+                  return D2D1::Point2F((r.left + r.right) * 0.5f, r.top);
+              };
+              auto centerLeft = [](const D2D1_RECT_F& r) {
+                  return D2D1::Point2F(r.left, (r.top + r.bottom) * 0.5f);
+              };
+              auto centerRight = [](const D2D1_RECT_F& r) {
+                  return D2D1::Point2F(r.right, (r.top + r.bottom) * 0.5f);
+              };
+
+                // Wires: Delay -> Decay -> Lowpass -> Allpass -> (feedback) -> Delay.
+                const float inset = 2.0f;
+                auto insetPt = [&](D2D1_POINT_2F p, float dx, float dy) {
+                    p.x += dx;
+                    p.y += dy;
+                    return p;
+                };
+
+                // Keep the first connector perfectly vertical (no diagonal slant):
+                // align the source point on DELAY to DECAY's center x.
+                const float decayCenterX = (decayRect.left + decayRect.right) * 0.5f;
+                drawMidArrow(D2D1::Point2F(decayCenterX, delayRect.bottom + inset),
+                             D2D1::Point2F(decayCenterX, decayRect.top - inset),
+                             highlighted_ ? 0.95f : 0.80f);
+                drawMidArrow(insetPt(centerRight(decayRect), inset, 0.0f),
+                             insetPt(centerLeft(lowpassRect), -inset, 0.0f),
+                             highlighted_ ? 0.95f : 0.80f);
+                drawMidArrow(insetPt(centerRight(lowpassRect), inset, 0.0f),
+                             insetPt(centerLeft(allpassRect), -inset, 0.0f),
+                             highlighted_ ? 0.95f : 0.80f);
+
+                // Feedback return (single clean vertical segment above ALLPASS).
+                const D2D1_POINT_2F returnFrom =
+                    insetPt(centerTop(allpassRect), 0.0f, -inset);
+                const D2D1_POINT_2F returnTo =
+                    D2D1::Point2F(returnFrom.x, delayRect.bottom + inset);
+                drawMidArrow(returnFrom, returnTo, highlighted_ ? 0.70f : 0.55f);
+
+              // Blocks.
+              if (outlineBrush) {
+                  const float originalOpacity = outlineBrush->GetOpacity();
+                  outlineBrush->SetOpacity(highlighted_ ? 0.75f : 0.55f);
+
+                  resources.target->DrawRoundedRectangle(
+                      D2D1::RoundedRect(delayRect, corner, corner), outlineBrush,
+                      outlineThickness);
+                  resources.target->DrawRoundedRectangle(
+                      D2D1::RoundedRect(decayRect, corner, corner), outlineBrush,
+                      outlineThickness);
+                  resources.target->DrawRoundedRectangle(
+                      D2D1::RoundedRect(lowpassRect, corner, corner), outlineBrush,
+                      outlineThickness);
+                  resources.target->DrawRoundedRectangle(
+                      D2D1::RoundedRect(allpassRect, corner, corner), outlineBrush,
+                      outlineThickness);
+
+                  outlineBrush->SetOpacity(originalOpacity);
+              }
+
+              drawLabel(L"DELAY", delayRect, highlighted_ ? 0.90f : 0.75f);
+              drawLabel(L"DECAY", decayRect, highlighted_ ? 0.90f : 0.75f);
+              drawLabel(L"LOWPASS", lowpassRect, highlighted_ ? 0.90f : 0.75f);
+              drawLabel(L"ALLPASS", allpassRect, highlighted_ ? 0.90f : 0.75f);
+
+                break;
             }
-            break;
-        }
         case FlowModule::kBody: {
             if (resources.accentBrush) {
                 // Bell-curve-like response curve (Tone shifts, Size changes width).
@@ -346,11 +485,8 @@ bool ModulePreviewNode::onPointerDown(float x, float y) {
         return false;
     }
 
-    if (module_ == FlowModule::kExcitation && onPickPositionChanged_) {
-        const auto track = computePickTrackRect();
-        if (ContainsPoint(track, x, y)) {
-            draggingPickPosition_ = true;
-            onPickPositionChanged_(pickPositionFromX(x));
+    if (module_ == FlowModule::kExcitation) {
+        if (waveformSelector_ && waveformSelector_->onPointerDown(x, y)) {
             return true;
         }
     }

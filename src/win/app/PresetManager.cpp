@@ -174,7 +174,7 @@ bool PresetManager::parse(const std::string& content,
         if (auto v = ExtractValue(content, key)) {
             const float value = ParseFloat(*v, ok);
             if (!ok) {
-                errorMessage = L"Failed to parse preset float field";
+                errorMessage = L"Failed to parse preset float field"; 
                 return false;
             }
             params.setParam(id, value);
@@ -182,11 +182,50 @@ bool PresetManager::parse(const std::string& content,
         return true;
     };
 
+    bool hasWaveEnabled = false;
+    bool hasWaveLevel = false;
+    bool hasWaveformType = false;
+    bool hasWaveDuty = false;
+    bool hasNoiseEnabled = false;
+    bool hasNoiseLevel = false;
+    bool hasNoiseJitter = false;
+    bool hasNoiseOverdrive = false;
+    bool hasNoiseColor = false;
+
+    auto setFloatTrack = [&](const char* key, engine::ParamId id,
+                             bool& flag) -> bool {
+        if (auto v = ExtractValue(content, key)) {
+            const float value = ParseFloat(*v, ok);
+            if (!ok) {
+                errorMessage = L"Failed to parse preset float field";
+                return false;
+            }
+            params.setParam(id, value);
+            flag = true;
+        }
+        return true;
+    };
+
     if (!setFloat("decay", engine::ParamId::Decay)) return false;
     if (!setFloat("brightness", engine::ParamId::Brightness)) return false;
-    if (!setFloat("excitationBrightness", engine::ParamId::ExcitationBrightness)) return false;
-    if (!setFloat("excitationVelocity", engine::ParamId::ExcitationVelocity)) return false;
-    if (!setFloat("excitationMix", engine::ParamId::ExcitationMix)) return false;
+    if (!setFloatTrack("waveEnabled", engine::ParamId::WaveEnabled, hasWaveEnabled))
+        return false;
+    if (!setFloatTrack("waveLevel", engine::ParamId::WaveLevel, hasWaveLevel))
+        return false;
+    if (!setFloatTrack("waveformType", engine::ParamId::WaveformType, hasWaveformType))
+        return false;
+    if (!setFloatTrack("waveDuty", engine::ParamId::WaveDuty, hasWaveDuty))
+        return false;
+    if (!setFloatTrack("noiseEnabled", engine::ParamId::NoiseEnabled, hasNoiseEnabled))
+        return false;
+    if (!setFloatTrack("noiseLevel", engine::ParamId::NoiseLevel, hasNoiseLevel))
+        return false;
+    if (!setFloatTrack("noiseJitter", engine::ParamId::NoiseJitter, hasNoiseJitter))
+        return false;
+    if (!setFloatTrack("noiseOverdrive", engine::ParamId::NoiseOverdrive, hasNoiseOverdrive))
+        return false;
+    if (!setFloatTrack("noiseColor", engine::ParamId::NoiseColor, hasNoiseColor))
+        return false;
     if (!setFloat("dispersionAmount", engine::ParamId::DispersionAmount)) return false;
     if (!setFloat("bodyTone", engine::ParamId::BodyTone)) return false;
     if (!setFloat("bodySize", engine::ParamId::BodySize)) return false;
@@ -228,9 +267,48 @@ bool PresetManager::parse(const std::string& content,
         params.setParam(engine::ParamId::EnableLowpass, value ? 1.0f : 0.0f);
     }
 
+    // Back-compat: legacy excitation fields.
+    float legacyExcitationMix = 1.0f;
+    bool hasLegacyMix = false;
+    if (auto mix = ExtractValue(content, "excitationMix")) {
+        legacyExcitationMix = ParseFloat(*mix, ok);
+        if (!ok) {
+            errorMessage = L"Failed to parse excitationMix";
+            return false;
+        }
+        hasLegacyMix = true;
+    }
+    if (auto legacyColor = ExtractValue(content, "excitationBrightness")) {
+        const float value = ParseFloat(*legacyColor, ok);
+        if (!ok) {
+            errorMessage = L"Failed to parse excitationBrightness";
+            return false;
+        }
+        if (!hasNoiseColor) {
+            params.setParam(engine::ParamId::NoiseColor, value);
+            hasNoiseColor = true;
+        }
+    }
     if (auto noise = ExtractValue(content, "noiseType")) {
         const auto lower = ToLower(*noise);
-        params.setParam(engine::ParamId::NoiseType, lower == "binary" ? 1.0f : 0.0f);
+        if (!hasNoiseOverdrive) {
+            params.setParam(engine::ParamId::NoiseOverdrive,
+                            lower == "binary" ? 1.0f : 0.0f);
+            hasNoiseOverdrive = true;
+        }
+    }
+    if (hasLegacyMix && !hasWaveLevel && !hasNoiseLevel) {
+        const float mix01 = std::clamp(legacyExcitationMix, 0.0f, 1.0f);
+        params.setParam(engine::ParamId::WaveEnabled, 1.0f);
+        params.setParam(engine::ParamId::WaveLevel, 1.0f - mix01);
+        params.setParam(engine::ParamId::WaveformType, 4.0f);  // Semisine
+        params.setParam(engine::ParamId::WaveDuty, 0.5f);
+        params.setParam(engine::ParamId::NoiseEnabled, 1.0f);
+        params.setParam(engine::ParamId::NoiseLevel, mix01);
+        if (!hasNoiseJitter) {
+            params.setParam(engine::ParamId::NoiseJitter, 1.0f);
+            hasNoiseJitter = true;
+        }
     }
 
     synthesis::StringConfig parsed = params.stringConfig();
@@ -276,27 +354,31 @@ std::string PresetManager::serialize(const synthesis::StringConfig& config,
         roomIrId = std::string(irList[static_cast<std::size_t>(idx)].id);
     }
 
-    std::ostringstream oss;
-    oss << "{\n"
-        << "  \"decay\": " << config.decay << ",\n"
-        << "  \"brightness\": " << config.brightness << ",\n"
-        << "  \"excitationBrightness\": " << config.excitationBrightness << ",\n"
-        << "  \"excitationVelocity\": " << config.excitationVelocity << ",\n"
-        << "  \"excitationMix\": " << config.excitationMix << ",\n"
-        << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
-        << "  \"bodyTone\": " << config.bodyTone << ",\n"
-        << "  \"bodySize\": " << config.bodySize << ",\n"
-        << "  \"roomMix\": " << config.roomAmount << ",\n"
-        << "  \"roomIR\": \"" << roomIrId << "\",\n"
-        // Legacy field for older presets/tools.
-        << "  \"roomAmount\": " << config.roomAmount << ",\n"
-        << "  \"pickPosition\": " << config.pickPosition << ",\n"
-        << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
-        << "  \"noiseType\": \""
-        << (config.noiseType == synthesis::NoiseType::Binary ? "binary" : "white") << "\",\n"
-        << "  \"excitationType\": \""
-        << (config.excitationType == synthesis::ExcitationType::Hammer ? "hammer" : "pluck")
-        << "\",\n"
+      std::ostringstream oss;
+      oss << "{\n"
+          << "  \"decay\": " << config.decay << ",\n"
+          << "  \"brightness\": " << config.brightness << ",\n"
+          << "  \"waveEnabled\": " << (config.waveEnabled ? 1 : 0) << ",\n"
+          << "  \"waveLevel\": " << config.waveLevel << ",\n"
+          << "  \"waveformType\": " << static_cast<int>(config.waveformType) << ",\n"
+          << "  \"waveDuty\": " << config.waveDuty << ",\n"
+          << "  \"noiseEnabled\": " << (config.noiseEnabled ? 1 : 0) << ",\n"
+          << "  \"noiseLevel\": " << config.noiseLevel << ",\n"
+          << "  \"noiseJitter\": " << config.noiseJitter << ",\n"
+          << "  \"noiseOverdrive\": " << config.noiseOverdrive << ",\n"
+          << "  \"noiseColor\": " << config.noiseColor << ",\n"
+          << "  \"dispersionAmount\": " << config.dispersionAmount << ",\n"
+          << "  \"bodyTone\": " << config.bodyTone << ",\n"
+          << "  \"bodySize\": " << config.bodySize << ",\n"
+          << "  \"roomMix\": " << config.roomAmount << ",\n"
+          << "  \"roomIR\": \"" << roomIrId << "\",\n"
+          // Legacy field for older presets/tools.
+          << "  \"roomAmount\": " << config.roomAmount << ",\n"
+          << "  \"pickPosition\": " << config.pickPosition << ",\n"
+          << "  \"enableLowpass\": " << (config.enableLowpass ? "true" : "false") << ",\n"
+          << "  \"excitationType\": \""
+          << (config.excitationType == synthesis::ExcitationType::Hammer ? "hammer" : "pluck")
+          << "\",\n"
         << "  \"excitationMode\": \""
         << (config.excitationMode == synthesis::ExcitationMode::FixedNoisePick ? "fixed" : "random")
         << "\",\n"

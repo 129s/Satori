@@ -140,7 +140,9 @@ bool VirtualKeyboard::onPointerDown(float x, float y) {
     dragging_ = true;
     activeKey_ = key;
     updateHoveredKey(key);
-    triggerKey(key);
+    const float h = std::max(1e-4f, key->bounds.bottom - key->bounds.top);
+    const float v = std::clamp((y - key->bounds.top) / h, 0.0f, 1.0f);
+    triggerKey(key, v);
     return true;
 }
 
@@ -152,7 +154,9 @@ bool VirtualKeyboard::onPointerMove(float x, float y) {
         if (key && key != activeKey_) {
             releaseKey(activeKey_);
             activeKey_ = key;
-            triggerKey(key);
+            const float h = std::max(1e-4f, key->bounds.bottom - key->bounds.top);
+            const float v = std::clamp((y - key->bounds.top) / h, 0.0f, 1.0f);
+            triggerKey(key, v);
         }
         handled = key != nullptr;
     }
@@ -188,7 +192,7 @@ bool VirtualKeyboard::pressKeyByMidi(int midiNote) {
         return false;
     }
     Key& key = keys_[it->second];
-    triggerKey(&key);
+    triggerKey(&key, 1.0f);
     return true;
 }
 
@@ -354,7 +358,7 @@ VirtualKeyboard::Key* VirtualKeyboard::hitTest(float x, float y) {
     return nullptr;
 }
 
-void VirtualKeyboard::triggerKey(Key* key) {
+void VirtualKeyboard::triggerKey(Key* key, float velocity) {
     if (!key) {
         return;
     }
@@ -364,8 +368,9 @@ void VirtualKeyboard::triggerKey(Key* key) {
     key->pressed = true;
     lastTriggeredLabel_ = key->label;
     lastTriggeredFrequency_ = key->frequency;
+    lastTriggeredVelocity_ = std::clamp(velocity, 0.0f, 1.0f);
     if (callback_) {
-        callback_(key->midiNote, key->frequency, true);
+        callback_(key->midiNote, key->frequency, true, lastTriggeredVelocity_);
     }
 }
 
@@ -381,7 +386,7 @@ void VirtualKeyboard::releaseKey(Key* key) {
         activeKey_ = nullptr;
     }
     if (callback_) {
-        callback_(key->midiNote, key->frequency, false);
+        callback_(key->midiNote, key->frequency, false, 0.0f);
     }
 }
 

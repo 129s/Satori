@@ -325,37 +325,189 @@ void FlowDiagramNode::drawString(ID2D1HwndRenderTarget* target,
 
     const float width = innerRight - innerLeft;
     const float height = innerBottom - innerTop;
-    const float baseY = innerBottom;
-
-    // 根据 Decay 绘制简化包络：越大衰减越慢，曲线越“平缓”
-    const float decayNorm = std::clamp(state_.decay, 0.0f, 1.0f);
-    const float sustainLevel = 0.1f + decayNorm * 0.6f;
-
-    const D2D1_POINT_2F p0{innerLeft, baseY};
-    const D2D1_POINT_2F p1{innerLeft + width * 0.1f,
-                           baseY - height * 0.9f};
-    const D2D1_POINT_2F p2{innerLeft + width * 0.6f,
-                           baseY - height * sustainLevel};
-    const D2D1_POINT_2F p3{innerRight, baseY};
-
-    const float thickness = highlighted ? 2.6f : 2.0f;
-    target->DrawLine(p0, p1, accentBrush, thickness);
-    target->DrawLine(p1, p2, accentBrush, thickness);
-    target->DrawLine(p2, p3, accentBrush, thickness);
-
-    const float dispersion = std::clamp(state_.dispersionAmount, 0.0f, 1.0f);
-    if (gridBrush && dispersion > 0.001f) {
-        const int lines = 4;
-        const float spacing = width / static_cast<float>(lines + 1);
-        const float tilt = 6.0f + 18.0f * dispersion;
-        for (int i = 0; i < lines; ++i) {
-            const float x = innerLeft + spacing * (i + 1);
-            D2D1_POINT_2F a{x, innerBottom};
-            D2D1_POINT_2F b{x + tilt, innerTop + height * 0.35f};
-            target->DrawLine(a, b, gridBrush, highlighted ? 1.6f : 1.0f);
-        }
+    if (width <= 8.0f || height <= 8.0f) {
+        return;
     }
-}
+
+      const float decay01 =
+          (std::clamp(state_.decay, 0.90f, 0.999f) - 0.90f) / (0.999f - 0.90f);
+      const float brightnessNorm = std::clamp(state_.brightness, 0.0f, 1.0f);
+      const float dispersionNorm =
+          std::clamp(state_.dispersionAmount, 0.0f, 1.0f);
+      const bool showDispersion = dispersionNorm > 0.02f;
+
+    ID2D1SolidColorBrush* detailBrush = gridBrush ? gridBrush : accentBrush;
+    ID2D1SolidColorBrush* labelBrush =
+        textBrush ? textBrush : (gridBrush ? gridBrush : accentBrush);
+
+    const float thickness = highlighted ? 2.2f : 1.6f;
+    const float thin = highlighted ? 1.6f : 1.1f;
+
+    auto drawArrow = [&](const D2D1_POINT_2F& from, const D2D1_POINT_2F& to,
+                         ID2D1SolidColorBrush* brush, float w) {
+        if (!brush) {
+            return;
+        }
+        target->DrawLine(from, to, brush, w);
+        const float angle = std::atan2(to.y - from.y, to.x - from.x);
+        const float len = 5.5f;
+        const float a1 = angle + 3.1415926f * 0.75f;
+        const float a2 = angle - 3.1415926f * 0.75f;
+        D2D1_POINT_2F p1{to.x + std::cos(a1) * len, to.y + std::sin(a1) * len};
+        D2D1_POINT_2F p2{to.x + std::cos(a2) * len, to.y + std::sin(a2) * len};
+        target->DrawLine(to, p1, brush, w);
+        target->DrawLine(to, p2, brush, w);
+    };
+
+    auto drawLabel = [&](const std::wstring& text, const D2D1_RECT_F& r,
+                         float opacity) {
+        if (!labelBrush || text.empty()) {
+            return;
+        }
+        const D2D1_RECT_F labelRect = D2D1::RectF(
+            r.left + 3.0f, r.top + 1.0f, r.right - 2.0f, r.bottom - 1.0f);
+        const float originalOpacity = labelBrush->GetOpacity();
+        labelBrush->SetOpacity(opacity);
+        target->DrawText(text.c_str(), static_cast<UINT32>(text.size()), textFormat,
+                         labelRect, labelBrush);
+        labelBrush->SetOpacity(originalOpacity);
+    };
+
+    // 简化 Karplus-Strong：Delay -> (Dispersion AP) -> LPF(brightness) -> -1*Decay -> 反馈。
+    const float leftX = innerLeft + width * 0.08f;
+    const float rightX = innerRight - width * 0.08f;
+    const float bottomY = innerTop + height * 0.70f;
+    const float topY = innerTop + height * 0.34f;
+
+    const float delayH = std::clamp(height * 0.18f, 16.0f, 26.0f);
+    const float delayW = std::clamp(width * 0.52f, 52.0f, width * 0.70f);
+    const float delayX = innerLeft + (width - delayW) * 0.5f;
+    const float delayY = bottomY - delayH * 0.5f;
+    const D2D1_RECT_F delayRect =
+        D2D1::RectF(delayX, delayY, delayX + delayW, delayY + delayH);
+
+    // Top segment blocks (flow right -> left).
+    const float blockH = std::clamp(delayH * 0.92f, 14.0f, 22.0f);
+    const float gap = 6.0f;
+    const int blockCount = showDispersion ? 3 : 2;
+    const float segmentLen = std::max(1.0f, rightX - leftX);
+    const float blockW =
+        std::clamp((segmentLen - gap * static_cast<float>(blockCount + 1)) /
+                       static_cast<float>(blockCount),
+                   26.0f, 54.0f);
+
+    float blockRight = rightX - gap;
+    auto takeBlock = [&](float w) {
+        const D2D1_RECT_F r = D2D1::RectF(blockRight - w, topY - blockH * 0.5f,
+                                          blockRight, topY + blockH * 0.5f);
+        blockRight = r.left - gap;
+        return r;
+    };
+
+    const D2D1_RECT_F apRect =
+        showDispersion ? takeBlock(blockW) : D2D1_RECT_F{};
+    const D2D1_RECT_F lpfRect = takeBlock(blockW);
+    const D2D1_RECT_F gainRect = takeBlock(blockW);
+
+    // Loop wires.
+    drawArrow(D2D1::Point2F(leftX, bottomY), D2D1::Point2F(delayRect.left, bottomY),
+              accentBrush, thickness);
+    drawArrow(D2D1::Point2F(delayRect.right, bottomY), D2D1::Point2F(rightX, bottomY),
+              accentBrush, thickness);
+    drawArrow(D2D1::Point2F(rightX, bottomY), D2D1::Point2F(rightX, topY), accentBrush,
+              thickness);
+
+    if (showDispersion) {
+        drawArrow(D2D1::Point2F(rightX, topY), D2D1::Point2F(apRect.right, topY),
+                  accentBrush, thickness);
+        drawArrow(D2D1::Point2F(apRect.left, topY), D2D1::Point2F(lpfRect.right, topY),
+                  accentBrush, thickness);
+    } else {
+        drawArrow(D2D1::Point2F(rightX, topY), D2D1::Point2F(lpfRect.right, topY),
+                  accentBrush, thickness);
+    }
+    drawArrow(D2D1::Point2F(lpfRect.left, topY), D2D1::Point2F(gainRect.right, topY),
+              accentBrush, thickness);
+    drawArrow(D2D1::Point2F(gainRect.left, topY), D2D1::Point2F(leftX, topY),
+              accentBrush, thickness);
+    drawArrow(D2D1::Point2F(leftX, topY), D2D1::Point2F(leftX, bottomY), accentBrush,
+              thickness);
+
+    // Delay block.
+    if (detailBrush) {
+        target->DrawRectangle(delayRect, detailBrush, thin);
+        drawLabel(L"DELAY", delayRect, highlighted ? 0.85f : 0.65f);
+        const float originalOpacity = detailBrush->GetOpacity();
+        detailBrush->SetOpacity(highlighted ? 0.85f : 0.6f);
+        const float y0 = delayRect.top + delayH * 0.35f;
+        const float y1 = delayRect.top + delayH * 0.65f;
+        const float x0 = delayRect.left + 6.0f;
+        const float x1 = delayRect.right - 6.0f;
+        target->DrawLine(D2D1::Point2F(x0, y0), D2D1::Point2F(x1, y0), detailBrush,
+                         thin);
+        target->DrawLine(D2D1::Point2F(x0, y1), D2D1::Point2F(x1, y1), detailBrush,
+                         thin);
+        detailBrush->SetOpacity(originalOpacity);
+    }
+
+    // Dispersion AP (optional).
+    if (showDispersion && detailBrush) {
+        target->DrawRectangle(apRect, detailBrush, thin);
+        drawLabel(L"AP", apRect, highlighted ? 0.85f : 0.6f);
+        const float originalOpacity = detailBrush->GetOpacity();
+        detailBrush->SetOpacity(highlighted ? 0.85f : 0.6f);
+        const float tilt = 2.0f + 10.0f * dispersionNorm;
+        const float x0 = apRect.left + 6.0f;
+        const float x1 = apRect.right - 6.0f;
+        const float yMid = (apRect.top + apRect.bottom) * 0.5f;
+        target->DrawLine(D2D1::Point2F(x0, yMid + 4.0f),
+                         D2D1::Point2F(x1, yMid - 4.0f - tilt), detailBrush, thin);
+        target->DrawLine(D2D1::Point2F(x0, yMid - 4.0f),
+                         D2D1::Point2F(x1, yMid + 4.0f + tilt), detailBrush, thin);
+        detailBrush->SetOpacity(originalOpacity);
+    }
+
+    // Low-pass (brightness).
+    if (detailBrush) {
+        target->DrawRectangle(lpfRect, detailBrush, thin);
+        drawLabel(L"LPF", lpfRect, highlighted ? 0.85f : 0.6f);
+        const float originalOpacity = detailBrush->GetOpacity();
+        detailBrush->SetOpacity(highlighted ? 0.85f : 0.55f);
+        const float pad = 4.0f;
+        const float xLeft = lpfRect.left + pad;
+        const float xRight = lpfRect.right - pad;
+        const float yHigh = lpfRect.top + pad;
+        const float yLow = lpfRect.bottom - pad;
+        const float cutoffX =
+            xLeft + (xRight - xLeft) * (0.15f + 0.75f * brightnessNorm);
+        target->DrawLine(D2D1::Point2F(xLeft, yHigh), D2D1::Point2F(cutoffX, yHigh),
+                         detailBrush, thin);
+        target->DrawLine(D2D1::Point2F(cutoffX, yHigh), D2D1::Point2F(cutoffX, yLow),
+                         detailBrush, thin);
+        target->DrawLine(D2D1::Point2F(cutoffX, yLow), D2D1::Point2F(xRight, yLow),
+                         detailBrush, thin);
+        detailBrush->SetOpacity(originalOpacity);
+    }
+
+    // -1 * decay (feedback gain).
+    if (detailBrush) {
+        target->DrawRectangle(gainRect, detailBrush, thin);
+        drawLabel(L"-×DECAY", gainRect, highlighted ? 0.85f : 0.6f);
+    }
+    if (accentBrush) {
+        const float originalOpacity = accentBrush->GetOpacity();
+        accentBrush->SetOpacity(highlighted ? 0.75f : 0.55f);
+        const float pad = 3.5f;
+        const float barW = 5.5f;
+        const float x = gainRect.right - pad - barW;
+          const float h = (gainRect.bottom - gainRect.top - 2.0f * pad) * decay01;
+          const float y0 = gainRect.bottom - pad - h;
+          const D2D1_RECT_F bar =
+              D2D1::RectF(x, y0, x + barW, gainRect.bottom - pad);
+          target->FillRectangle(bar, accentBrush);
+        accentBrush->SetOpacity(originalOpacity);
+    }
+} 
 
 void FlowDiagramNode::drawBody(ID2D1HwndRenderTarget* target,
                                ID2D1SolidColorBrush* textBrush,

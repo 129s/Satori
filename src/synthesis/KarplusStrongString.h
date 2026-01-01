@@ -11,24 +11,32 @@ class FilterChain;
 
 namespace synthesis {
 
-enum class NoiseType { White, Binary };
+enum class WaveformType { Sine, Triangle, Saw, Square, Semisine };
 enum class ExcitationMode { RandomNoisePick, FixedNoisePick };
 enum class ExcitationType { Pluck, Hammer };
 
 struct StringConfig {
     double sampleRate = 44100.0;
     float decay = 0.996f;        // Base energy decay per period.
-    float brightness = 0.5f;     // Low-pass strength (0=dark, 1=bright).
-    float excitationBrightness = 0.6f;  // Excitation hardness / brightness.
-    float excitationVelocity = 0.5f;    // Velocity modulation sensitivity.
-    float excitationMix = 1.0f;   // 0 = Impulse (pick), 1 = Noise
-    float pickPosition = 0.5f;   // Pick position along string (0-1).
+    float brightness = 0.5f;     // Low-pass strength (0=dark, 1=bright).       
+
+    // Excitation generators (Serum-style: enable + level per source).
+    bool waveEnabled = true;
+    float waveLevel = 0.0f;
+    WaveformType waveformType = WaveformType::Sine;
+    float waveDuty = 0.5f;  // 0..1, waveform skew / PWM.
+
+    bool noiseEnabled = true;
+    float noiseLevel = 1.0f;
+    float noiseJitter = 1.0f;     // Density: 0 = sparse, 1 = continuous.
+    float noiseOverdrive = 0.0f;  // 0 = white-ish, 1 = binary-ish.
+    float noiseColor = 1.0f;      // Lowpass cutoff: 0 = dark, 1 = bright.
+    float pickPosition = 0.5f;   // Pick position along string (0-1).     
     float dispersionAmount = 0.12f;  // Dispersion amount (0 disables).
     float bodyTone = 0.5f;       // Body tone color.
     float bodySize = 0.5f;       // Body size scaling.
     float roomAmount = 0.0f;     // Room/wet amount.
     int roomIrIndex = 0;         // Built-in IR selection (index into IR library).
-    NoiseType noiseType = NoiseType::White;
     bool enableLowpass = true;
     unsigned int seed = 0;  // Noise RNG seed (0 uses random_device).
     ExcitationMode excitationMode = ExcitationMode::RandomNoisePick;
@@ -62,11 +70,8 @@ public:
     void updateConfig(const StringConfig& config);
 
 private:
-    void fillExcitationNoise();
-    void applyPickPositionShape();
-    void applyExcitationColor();
+    void fillExcitationBuffer();
     float computeEffectivePickPosition() const;
-    float computeExcitationColor() const;
     void configureFilters();
     std::vector<float> dispersionCoefficients() const;
     void initializeWaveguideFromExcitation();
@@ -87,12 +92,8 @@ private:
     float tuningAllpassCoefficient_ = 0.0f;
     std::size_t hammerSampleIndex_ = 0;
     std::size_t hammerSamplesTotal_ = 0;
-    float hammerLowpassState_ = 0.0f;
-    std::mt19937 hammerRng_;
     double currentFrequency_ = 440.0;
-    float currentVelocity_ = 1.0f;
     float currentPickPosition_ = 0.5f;
-    float currentExcitationColor_ = 0.6f;
 };
 
 }  // namespace synthesis

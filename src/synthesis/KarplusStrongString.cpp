@@ -18,6 +18,114 @@ float clampPick(float value) {
     return std::max(0.001f, std::min(0.999f, value));
 }
 
+float clampDuty(float value) { return std::clamp(value, 0.01f, 0.99f); }
+
+float warpPhase(float phase01, float duty01) {
+    const float phase = std::clamp(phase01, 0.0f, 1.0f);
+    const float duty = clampDuty(duty01);
+    if (phase < duty) {
+        return 0.5f * (phase / duty);
+    }
+    return 0.5f + 0.5f * ((phase - duty) / (1.0f - duty));
+}
+
+float waveformSample(WaveformType type, float phase01, float duty01) {
+    constexpr float kTwoPi = 6.283185307179586f;
+    constexpr float kPi = 3.141592653589793f;
+
+    const float warped = warpPhase(phase01, duty01);
+    switch (type) {
+        case WaveformType::Triangle: {
+            // -1 at 0, +1 at 0.5, -1 at 1.
+            if (warped < 0.5f) {
+                return -1.0f + 4.0f * warped;
+            }
+            return 3.0f - 4.0f * warped;
+        }
+        case WaveformType::Saw:
+            return 2.0f * warped - 1.0f;
+        case WaveformType::Square: {
+            // True PWM: use the unwarped phase threshold.
+            const float duty = clampDuty(duty01);
+            return (std::clamp(phase01, 0.0f, 1.0f) < duty) ? 1.0f : -1.0f;
+        }
+        case WaveformType::Semisine:
+            // One half-sine per cycle: includes all integer harmonics, ~1/n^2 rolloff.
+            return std::sin(kPi * warped);
+        case WaveformType::Sine:
+        default:
+            return std::sin(kTwoPi * warped);
+    }
+}
+
+float applyNoiseOverdrive(float x, float drive01) {
+    const float d = clamp01(drive01);
+    const float g = d * 50.0f;  // Higher => closer to sign(x).
+    if (g <= 1e-6f) {
+        return x;
+    }
+    const float ax = std::abs(x);
+    return (x * (1.0f + g)) / (1.0f + g * ax);
+}
+
+float onePoleAlphaFromCutoff(double sampleRate, float cutoffHz) {
+    if (sampleRate <= 0.0) {
+        return 1.0f;
+    }
+    const double fc = std::max(1.0, static_cast<double>(cutoffHz));
+    const double a = 1.0 - std::exp(-(2.0 * 3.141592653589793 * fc) / sampleRate);
+    return static_cast<float>(std::clamp(a, 0.001, 0.999));
+}
+
+float cutoffForNoiseColor(double sampleRate, float color01) {
+    const double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    const double minFc = 160.0;
+    const double maxFc = std::max(minFc, 0.45 * sr);
+    const double t = std::clamp(static_cast<double>(clamp01(color01)), 0.0, 1.0);
+    const double fc = minFc * std::pow(maxFc / minFc, t);
+    return static_cast<float>(fc);
+}
+
+void generateNoise(std::vector<float>& out,
+                   std::mt19937& rng,
+                   double sampleRate,
+                   float jitter01,
+                   float overdrive01,
+                   float color01) {
+    if (out.empty()) {
+        return;
+    }
+
+    std::uniform_real_distribution<float> uniform(-1.0f, 1.0f);
+    std::uniform_real_distribution<float> uniform01(0.0f, 1.0f);
+
+    const float jitter = clamp01(jitter01);
+    const float p = jitter * jitter;  // More resolution near 0.
+    const float invSqrtP =
+        (p > 1e-6f) ? std::min(4.0f, 1.0f / std::sqrt(p)) : 0.0f;
+
+    for (auto& sample : out) {
+        float x = uniform(rng);
+        if (p < 0.9999f) {
+            if (uniform01(rng) > p) {
+                x = 0.0f;
+            } else {
+                x *= invSqrtP;
+            }
+        }
+        x = applyNoiseOverdrive(x, overdrive01);
+        sample = x;
+    }
+
+    const float cutoff = cutoffForNoiseColor(sampleRate, color01);
+    const float alpha = onePoleAlphaFromCutoff(sampleRate, cutoff);
+    float state = 0.0f;
+    for (auto& sample : out) {
+        state += alpha * (sample - state);
+        sample = state;
+    }
+}
+
 double firstOrderAllPassPhaseDelaySamples(double coefficient, double omega);
 
 float thiranFractionalDelayCoefficient(double fractionalDelay) {
@@ -158,7 +266,7 @@ std::vector<float> KarplusStrongString::excitationBufferPreview(
     return preview;
 }
 
-void KarplusStrongString::fillExcitationNoise() {
+void KarplusStrongString::fillExcitationBuffer() {
     if (excitationBuffer_.empty()) {
         return;
     }
@@ -167,68 +275,49 @@ void KarplusStrongString::fillExcitationNoise() {
     const bool randomMode =
         config_.excitationMode == ExcitationMode::RandomNoisePick;
     if (randomMode) {
-        rngSeed_ = rng();  // Update seed so next pluck gets a new noise burst.
+        rngSeed_ = rng();  // Update seed so next excitation gets a new jitter pattern.
     }
 
-    std::uniform_real_distribution<float> uniform(-1.0f, 1.0f);
-    std::bernoulli_distribution binary(0.5);
-
-    const float mix = clamp01(config_.excitationMix);
     const std::size_t n = excitationBuffer_.size();
-
-    // 1) Generate noise excitation.
     std::vector<float> noise(n, 0.0f);
-    for (auto& sample : noise) {
-        switch (config_.noiseType) {
-            case NoiseType::Binary:
-                sample = binary(rng) ? 1.0f : -1.0f;
-                break;
-            case NoiseType::White:
-            default:
-                sample = uniform(rng);
-                break;
+    const bool noiseOn =
+        config_.noiseEnabled && clamp01(config_.noiseLevel) > 0.0001f;
+    if (noiseOn) {
+        generateNoise(noise, rng, config_.sampleRate, config_.noiseJitter,
+                      config_.noiseOverdrive, config_.noiseColor);
+        const float level = clamp01(config_.noiseLevel);
+        for (auto& sample : noise) {
+            sample *= level;
         }
     }
 
-    // 2) Generate a plectrum-shaped impulse (short Hann bump) centered at pick position.
-    std::vector<float> impulse(n, 0.0f);
-    constexpr double kImpulseDurationSeconds = 0.005;  // ~5ms pluck transient.
-    const double sr = config_.sampleRate > 0.0 ? config_.sampleRate : 44100.0;
-    std::size_t windowLen = static_cast<std::size_t>(
-        std::round(sr * kImpulseDurationSeconds));
-    windowLen = std::max<std::size_t>(2, std::min(windowLen, n));
+    const bool waveOn =
+        config_.waveEnabled && clamp01(config_.waveLevel) > 0.0001f;
+    const float waveLevel = clamp01(config_.waveLevel);
+    const bool hammer = (config_.excitationType == ExcitationType::Hammer);
+    constexpr float kPi = 3.141592653589793f;
 
-    const float pickPos = clampPick(currentPickPosition_);
-    const std::size_t pickIndex = static_cast<std::size_t>(
-        pickPos * static_cast<float>(n - 1));
-
-    std::size_t start =
-        (pickIndex > windowLen / 2) ? pickIndex - windowLen / 2 : 0;
-    if (start + windowLen > n) {
-        start = (n > windowLen) ? (n - windowLen) : 0;
-    }
-
-    constexpr double kTwoPi = 6.283185307179586;
-    for (std::size_t i = 0; i < windowLen; ++i) {
-        const double phase =
-            (windowLen > 1)
-                ? (kTwoPi * static_cast<double>(i) /
-                   static_cast<double>(windowLen - 1))
-                : 0.0;
-        const float w =
-            static_cast<float>(0.5 - 0.5 * std::cos(phase));  // Hann window
-        impulse[start + i] = w;
-    }
-
-    // 3) Mix Noise/Impulse and remove DC.
     float mean = 0.0f;
     for (std::size_t i = 0; i < n; ++i) {
-        const float v = mix * noise[i] + (1.0f - mix) * impulse[i];
-        excitationBuffer_[i] = v;
-        mean += v;
+        const float phase =
+            (n > 1) ? (static_cast<float>(i) / static_cast<float>(n - 1)) : 0.0f;
+        const float env = hammer ? ((n > 1) ? std::sin(kPi * phase) : 1.0f) : 1.0f;
+
+        float sample = 0.0f;
+        if (waveOn) {
+            sample += waveLevel *
+                      waveformSample(config_.waveformType, phase, config_.waveDuty);
+        }
+        if (noiseOn) {
+            sample += noise[i];
+        }
+        sample *= env;
+
+        excitationBuffer_[i] = sample;
+        mean += sample;
     }
-    // Keep legacy behavior for pure-noise excitation to avoid unintended energy shifts.
-    if (mix < 0.999f) {
+
+    if (n > 1) {
         mean /= static_cast<float>(n);
         for (auto& sample : excitationBuffer_) {
             sample -= mean;
@@ -236,64 +325,8 @@ void KarplusStrongString::fillExcitationNoise() {
     }
 }
 
-void KarplusStrongString::applyPickPositionShape() {
-    if (excitationBuffer_.size() < 3) {
-        return;
-    }
-    const float pickPos = clampPick(currentPickPosition_);
-    const auto pickIndex = static_cast<std::size_t>(
-        pickPos * static_cast<float>(excitationBuffer_.size() - 1));
-
-    if (pickIndex == 0 || pickIndex >= excitationBuffer_.size() - 1) {
-        return;
-    }
-
-    for (std::size_t i = 0; i <= pickIndex; ++i) {
-        const float gain = static_cast<float>(i) / static_cast<float>(pickIndex);
-        excitationBuffer_[i] *= gain;
-    }
-
-    const std::size_t rightCount = excitationBuffer_.size() - 1 - pickIndex;
-    for (std::size_t i = pickIndex + 1; i < excitationBuffer_.size(); ++i) {
-        const float gain =
-            static_cast<float>(excitationBuffer_.size() - 1 - i) / static_cast<float>(rightCount);
-        excitationBuffer_[i] *= gain;
-    }
-}
-
-void KarplusStrongString::applyExcitationColor() {
-    if (excitationBuffer_.empty()) {
-        return;
-    }
-    const float color = clamp01(currentExcitationColor_);
-    if (color <= 0.01f) {
-        return;
-    }
-    // Use a 1-pole lowpass to split low/high and tilt the spectrum by color.
-    const float targetAlpha =
-        std::clamp(0.05f + 0.4f * color, 0.01f, 0.95f);
-    float state = 0.0f;
-    for (auto& sample : excitationBuffer_) {
-        state = targetAlpha * sample + (1.0f - targetAlpha) * state;
-        const float high = sample - state;
-        const float tilt = (color - 0.5f) * 1.2f;  // Negative = darker, positive = brighter.
-        const float lowGain = 1.0f - 0.4f * tilt;
-        const float highGain = 1.0f + 0.6f * tilt;
-        sample = state * lowGain + high * highGain;
-    }
-}
-
 float KarplusStrongString::computeEffectivePickPosition() const {
-    const float sensitivity = clamp01(config_.excitationVelocity);
-    const float offset = (0.5f - currentVelocity_) * 0.25f * sensitivity;
-    return clampPick(config_.pickPosition + offset);
-}
-
-float KarplusStrongString::computeExcitationColor() const {
-    const float sensitivity = clamp01(config_.excitationVelocity);
-    const float base = clamp01(config_.excitationBrightness);
-    const float delta = (currentVelocity_ - 0.5f) * 0.6f * sensitivity;
-    return clamp01(base + delta);
+    return 0.5f;
 }
 
 void KarplusStrongString::configureFilters() {
@@ -370,11 +403,10 @@ void KarplusStrongString::start(double frequency, float velocity) {
         active_ = false;
         return;
     }
+    (void)velocity;
 
     currentFrequency_ = frequency;
-    currentVelocity_ = clamp01(velocity);
     currentPickPosition_ = computeEffectivePickPosition();
-    currentExcitationColor_ = computeExcitationColor();
 
     const double targetRoundTripDelay = config_.sampleRate / frequency;
     const double omega =
@@ -406,57 +438,16 @@ void KarplusStrongString::start(double frequency, float velocity) {
     lastOutput_ = 0.0f;
     hammerSampleIndex_ = 0;
     hammerSamplesTotal_ = 0;
-    hammerLowpassState_ = 0.0f;
 
     if (config_.excitationType == ExcitationType::Hammer) {
-        hammerRng_.seed(rngSeed_);
-        const bool randomMode =
-            config_.excitationMode == ExcitationMode::RandomNoisePick;
-
-        const float hardness = clamp01(currentExcitationColor_);
-        const double contactSeconds = 0.0015 + (1.0 - hardness) * 0.0045;
+        constexpr double contactSeconds = 0.0035;
         hammerSamplesTotal_ = static_cast<std::size_t>(std::lround(
             std::clamp(contactSeconds * config_.sampleRate, 2.0, 4096.0)));
         excitationBuffer_.assign(hammerSamplesTotal_, 0.0f);
-
-        constexpr double kPi = 3.141592653589793;
-        const float mix = clamp01(config_.excitationMix);
-        const float lpAlpha = std::clamp(0.05f + 0.9f * hardness, 0.01f, 0.98f);
-        float state = 0.0f;
-        std::uniform_real_distribution<float> uniform(-1.0f, 1.0f);
-        std::bernoulli_distribution binary(0.5);
-
-        for (std::size_t i = 0; i < hammerSamplesTotal_; ++i) {
-            const double phase =
-                (hammerSamplesTotal_ > 1)
-                    ? (kPi * static_cast<double>(i) /
-                       static_cast<double>(hammerSamplesTotal_ - 1))
-                    : 0.0;
-            const float env = static_cast<float>(std::sin(phase));
-            float noiseSample = 0.0f;
-            switch (config_.noiseType) {
-                case NoiseType::Binary:
-                    noiseSample = binary(hammerRng_) ? 1.0f : -1.0f;
-                    break;
-                case NoiseType::White:
-                default:
-                    noiseSample = uniform(hammerRng_);
-                    break;
-            }
-            const float pulse = env;
-            const float combined = (1.0f - mix) * pulse + mix * noiseSample;
-            state = lpAlpha * combined + (1.0f - lpAlpha) * state;
-            excitationBuffer_[i] = env * state;
-        }
-
-        if (randomMode) {
-            rngSeed_ = hammerRng_();
-        }
+        fillExcitationBuffer();
     } else {
         excitationBuffer_.assign(period, 0.0f);
-        fillExcitationNoise();
-        applyPickPositionShape();
-        applyExcitationColor();
+        fillExcitationBuffer();
         initializeWaveguideFromExcitation();
     }
 

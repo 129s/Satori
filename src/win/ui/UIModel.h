@@ -36,17 +36,19 @@ enum class FlowModule {
     kRoom,
 };
 
-struct FlowDiagramState {
-    float decay = 0.0f;
-    float brightness = 0.0f;
-    float dispersionAmount = 0.0f;
-    float pickPosition = 0.0f;
-    float bodyTone = 0.0f;
-    float bodySize = 0.0f;
-    float roomAmount = 0.0f;
+  struct FlowDiagramState {
+      float decay = 0.0f;
+      float brightness = 0.0f;
+      float dispersionAmount = 0.0f;
+      float pickPosition = 0.0f;
+
+      int waveformType = 0;  // 0..4 (see synthesis::WaveformType).
+
+      float bodyTone = 0.0f;
+      float bodySize = 0.0f;
+      float roomAmount = 0.0f;
     int roomIrIndex = 0;
     std::vector<float> roomIrPreviewSamples;
-    int noiseType = 0;  // 0 = White, 1 = Binary（或项目内部约定）
     std::vector<float> excitationSamples;  // 激励瞬态/包络预览（用于 Excitation Scope）
     FlowModule highlightedModule = FlowModule::kNone;
 };
@@ -87,14 +89,14 @@ struct MidiTransportModel {
     std::function<void()> onStop;
 };
 
-struct HeaderBarModel {
-    std::wstring logoText = L"Satori";
-    std::wstring mixSampleRateText;
-    DropdownModel device;
-    DropdownModel sampleRate;
-    DropdownModel bufferFrames;
-    MidiTransportModel midi;
-};
+ struct HeaderBarModel {
+     std::wstring logoText = L"Satori";
+     DropdownModel device;
+     DropdownModel midiInput;
+     DropdownModel sampleRate;
+     DropdownModel bufferFrames;
+     MidiTransportModel midi;
+ };
 
 struct UIModel {
     std::vector<std::wstring> instructions;
@@ -103,7 +105,7 @@ struct UIModel {
     std::vector<SliderDescriptor> sliders;
     std::vector<ModuleUI> modules;
     KeyboardConfig keyboardConfig;
-    std::function<void(int, double, bool)> keyCallback;
+    std::function<void(int, double, bool, float)> keyCallback;
     std::vector<float> waveformSamples;
     bool audioOnline = false;
     float sampleRate = 0.0f;

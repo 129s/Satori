@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "win/ui/UIModel.h"
@@ -8,6 +9,8 @@
 #include "win/ui/layout/UILayoutNode.h"
 
 namespace winui {
+
+class DropdownSelectorNode;
 
 // A single module "card" preview: top half visualization, module title, and highlight state.
 // This is used to build the unified 4-column layout (Excitation -> String -> Body -> Room).
@@ -25,7 +28,12 @@ public:
     void setPickPositionRange(float min, float max);
     bool isInteracting() const { return draggingPickPosition_; }
 
+    std::shared_ptr<DropdownSelectorNode> waveformSelector() const {
+        return waveformSelector_;
+    }
+
     float preferredHeight(float) const override;
+    void arrange(const D2D1_RECT_F& bounds) override;
     void draw(const RenderResources& resources) override;
     bool onPointerDown(float x, float y) override;
     bool onPointerMove(float x, float y) override;
@@ -45,6 +53,10 @@ private:
     float pickMax_ = 0.95f;
     bool draggingPickPosition_ = false;
     WaveformView waveformView_;
+
+    std::shared_ptr<DropdownSelectorNode> waveformSelector_;
+    D2D1_RECT_F excitationSelectorRect_{};
+    D2D1_RECT_F excitationScopeRect_{};
 };
 
 }  // namespace winui

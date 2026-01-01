@@ -5,20 +5,25 @@
 
 namespace engine {
 
-enum class ParamId {
+enum class ParamId {     
     Decay,
     Brightness,
     DispersionAmount,
-    ExcitationBrightness,
-    ExcitationVelocity,
-    ExcitationMix,
+    WaveEnabled,
+    WaveLevel,
+    WaveformType,
+    WaveDuty,
+    NoiseEnabled,
+    NoiseLevel,
+    NoiseJitter,
+    NoiseOverdrive,
+    NoiseColor,
     BodyTone,
     BodySize,
     RoomAmount,
     RoomIR,
     PickPosition,
     EnableLowpass,
-    NoiseType,
     MasterGain,
     AmpRelease,
 };

@@ -156,13 +156,14 @@ if (WIN32)
     endif()
     target_compile_definitions(SatoriRealtimeWin PRIVATE SATORI_HAS_ASIO_SDK=${SATORI_HAS_ASIO_SDK})
 
-    add_executable(SatoriWinApp WIN32
-        src/win/app/SatoriWinMain.cpp
-        src/win/app/PresetManager.cpp
-        src/win/ui/ParameterSlider.cpp
-        src/win/ui/ParameterKnob.cpp
-        src/win/ui/DebugOverlay.cpp
-        src/win/ui/Direct2DContext.cpp
+      add_executable(SatoriWinApp WIN32
+          src/win/app/SatoriWinMain.cpp
+          src/win/app/PresetManager.cpp
+          src/win/midi/WinMidiInput.cpp
+          src/win/ui/ParameterSlider.cpp
+          src/win/ui/ParameterKnob.cpp
+          src/win/ui/DebugOverlay.cpp
+          src/win/ui/Direct2DContext.cpp
         src/win/ui/KeyboardKeymap.cpp
         src/win/ui/layout/UIStackPanel.cpp
         src/win/ui/layout/UIHorizontalStack.cpp
@@ -184,10 +185,10 @@ if (WIN32)
         src/win/ui/WaveformView.cpp
         src/win/ui/UISkin.cpp
     )
-    target_sources(SatoriWinApp PRIVATE "${NUNITO_FONT_RC}")
-    target_link_libraries(SatoriWinApp PRIVATE SatoriRealtimeWin SatoriMidi d2d1.lib dwrite.lib)
-    target_compile_definitions(SatoriWinApp PRIVATE
-        $<$<CONFIG:Debug>:SATORI_ENABLE_UI_DEBUG=1>)
+      target_sources(SatoriWinApp PRIVATE "${NUNITO_FONT_RC}")
+      target_link_libraries(SatoriWinApp PRIVATE SatoriRealtimeWin SatoriMidi d2d1.lib dwrite.lib winmm.lib)
+      target_compile_definitions(SatoriWinApp PRIVATE
+          $<$<CONFIG:Debug>:SATORI_ENABLE_UI_DEBUG=1>)
 
     add_executable(SatoriKeyboardSandbox WIN32
         src/win/app/KeyboardSandboxMain.cpp

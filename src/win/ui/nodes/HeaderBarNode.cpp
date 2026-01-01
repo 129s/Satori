@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <d2d1helper.h>
+#include <string_view>
 #include <wrl/client.h>
 
 #include "win/ui/nodes/DropdownSelectorNode.h"
@@ -15,6 +16,58 @@ float RectHeight(const D2D1_RECT_F& r) { return r.bottom - r.top; }
 bool Contains(const D2D1_RECT_F& r, float x, float y) {
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 }
+
+std::wstring ToSingleLine(std::wstring_view text) {
+    std::wstring out;
+    out.reserve(text.size());
+    bool lastSpace = true;
+    for (wchar_t ch : text) {
+        if (ch == L'\r' || ch == L'\n' || ch == L'\t') {
+            ch = L' ';
+        }
+        const bool isSpace = ch == L' ';
+        if (isSpace) {
+            if (lastSpace) {
+                continue;
+            }
+            lastSpace = true;
+        } else {
+            lastSpace = false;
+        }
+        out.push_back(ch);
+    }
+    while (!out.empty() && out.front() == L' ') {
+        out.erase(out.begin());
+    }
+    while (!out.empty() && out.back() == L' ') {
+        out.pop_back();
+    }
+    return out;
+}
+
+struct WordWrappingGuard {
+    explicit WordWrappingGuard(IDWriteTextFormat* format,
+                               DWRITE_WORD_WRAPPING wrapping)
+        : format_(format),
+          oldWrapping_(format ? format->GetWordWrapping()
+                              : DWRITE_WORD_WRAPPING_WRAP) {
+        if (format_) {
+            (void)format_->SetWordWrapping(wrapping);
+        }
+    }
+    ~WordWrappingGuard() {
+        if (format_) {
+            (void)format_->SetWordWrapping(oldWrapping_);
+        }
+    }
+
+    WordWrappingGuard(const WordWrappingGuard&) = delete;
+    WordWrappingGuard& operator=(const WordWrappingGuard&) = delete;
+
+private:
+    IDWriteTextFormat* format_ = nullptr;
+    DWRITE_WORD_WRAPPING oldWrapping_{};
+};
 
 struct TextAlignmentGuard {
     explicit TextAlignmentGuard(IDWriteTextFormat* format,
@@ -47,6 +100,7 @@ private:
 
 HeaderBarNode::HeaderBarNode()
     : deviceSelector_(std::make_shared<DropdownSelectorNode>()),
+      midiInputSelector_(std::make_shared<DropdownSelectorNode>()),
       sampleRateSelector_(std::make_shared<DropdownSelectorNode>()),
       bufferFramesSelector_(std::make_shared<DropdownSelectorNode>()) {
     midiButtons_.push_back(MidiButtonState{MidiButtonId::Load});
@@ -57,9 +111,11 @@ HeaderBarNode::HeaderBarNode()
 
 void HeaderBarNode::setModel(const HeaderBarModel& model) {
     logoText_ = model.logoText.empty() ? L"Satori" : model.logoText;
-    mixSampleRateText_ = model.mixSampleRateText;
+    logoText_ = ToSingleLine(logoText_);
 
     deviceLabel_ = model.device.label.empty() ? L"Device" : model.device.label;
+    midiInputLabel_ =
+        model.midiInput.label.empty() ? L"Input" : model.midiInput.label;
     sampleRateLabel_ =
         model.sampleRate.label.empty() ? L"SampleRate" : model.sampleRate.label;
     bufferFramesLabel_ =
@@ -71,6 +127,13 @@ void HeaderBarNode::setModel(const HeaderBarModel& model) {
         deviceSelector_->setPageSize(model.device.pageSize);
         deviceSelector_->setSelectedIndex(model.device.selectedIndex);
         deviceSelector_->setOnChanged(model.device.onChanged);
+    }
+    if (midiInputSelector_) {
+        midiInputSelector_->setOnChanged({});
+        midiInputSelector_->setItems(model.midiInput.items);
+        midiInputSelector_->setPageSize(model.midiInput.pageSize);
+        midiInputSelector_->setSelectedIndex(model.midiInput.selectedIndex);
+        midiInputSelector_->setOnChanged(model.midiInput.onChanged);
     }
     if (sampleRateSelector_) {
         sampleRateSelector_->setOnChanged({});
@@ -138,6 +201,7 @@ void HeaderBarNode::setModel(const HeaderBarModel& model) {
 std::vector<std::shared_ptr<DropdownSelectorNode>> HeaderBarNode::selectors() const {
     std::vector<std::shared_ptr<DropdownSelectorNode>> list;
     if (deviceSelector_) list.push_back(deviceSelector_);
+    if (midiInputSelector_) list.push_back(midiInputSelector_);
     if (sampleRateSelector_) list.push_back(sampleRateSelector_);
     if (bufferFramesSelector_) list.push_back(bufferFramesSelector_);
     return list;
@@ -161,12 +225,79 @@ void HeaderBarNode::arrange(const D2D1_RECT_F& bounds) {
     const float yBottom = yCenter + dropdownH * 0.5f;
 
     const float bufferW = 150.0f;
-    const float sampleRateW = 130.0f;
-    const float deviceWDefault = 280.0f;
 
-    const float labelWDevice = 60.0f;
-    const float labelWSample = 90.0f;
-    const float labelWBuffer = 110.0f;
+    const float sampleRateDropMinW = 130.0f;
+    const float sampleRateDropMaxW = 220.0f;
+    const float midiInDropMinW = 160.0f;
+    const float midiInDropMaxW = 320.0f;
+    const float deviceDropMinW = 180.0f;
+    const float deviceDropMaxW = 520.0f;
+
+    const float labelWDeviceMin = 60.0f;
+    const float labelWMidiMin = 70.0f;
+    const float labelWSampleMin = 110.0f;
+    const float labelWBufferMin = 110.0f;
+    const float labelWDeviceMax = 140.0f;
+    const float labelWMidiMax = 140.0f;
+    const float labelWSampleMax = 180.0f;
+    const float labelWBufferMax = 200.0f;
+
+    const auto estimateLabelW = [](const std::wstring& text, float minW,
+                                   float maxW) {
+        const float kPadding = 12.0f;
+        const float kPerChar = 8.5f;
+        const float w = kPadding + kPerChar * static_cast<float>(text.size());
+        return std::clamp(w, minW, maxW);
+    };
+
+    const float labelWDevice =
+        estimateLabelW(deviceLabel_, labelWDeviceMin, labelWDeviceMax);
+    const float labelWMidi =
+        estimateLabelW(midiInputLabel_, labelWMidiMin, labelWMidiMax);
+    const float labelWSample =
+        estimateLabelW(sampleRateLabel_, labelWSampleMin, labelWSampleMax);
+    const float labelWBuffer =
+        estimateLabelW(bufferFramesLabel_, labelWBufferMin, labelWBufferMax);
+
+    const float logoLeft = bounds_.left + paddingX;
+    const float transportGap = 10.0f;
+    const float midiIconSize = std::min(32.0f, dropdownH);
+    const float midiIconGap = 0.0f;
+    const float midiGroupW =
+        static_cast<float>(midiButtons_.size()) * midiIconSize +
+        std::max(0.0f, static_cast<float>(midiButtons_.size() - 1)) * midiIconGap;
+    const float logoMinW = 110.0f;
+    const float leftMinW = logoMinW + transportGap + midiGroupW;
+    const float rightGroupLeftLimit = logoLeft + leftMinW + groupGap;
+
+    const float boundsW = std::max(0.0f, bounds_.right - bounds_.left);
+    const float rightBudget =
+        std::max(0.0f, boundsW - paddingX * 2.0f - leftMinW);
+    const float rightMinNeed =
+        (labelWBuffer + labelGap + bufferW) + groupGap +
+        (labelWSample + labelGap + sampleRateDropMinW) + groupGap +
+        (labelWMidi + labelGap + midiInDropMinW) + groupGap +
+        (labelWDevice + labelGap + deviceDropMinW);
+    float extra = std::max(0.0f, rightBudget - rightMinNeed);
+
+    float deviceDropW = deviceDropMinW;
+    const float deviceExtraCap = std::max(0.0f, deviceDropMaxW - deviceDropMinW);
+    const float deviceExtra = std::min(extra, deviceExtraCap);
+    deviceDropW += deviceExtra;
+    extra -= deviceExtra;
+
+    float sampleRateDropW = sampleRateDropMinW;
+    const float sampleExtraCap =
+        std::max(0.0f, sampleRateDropMaxW - sampleRateDropMinW);
+    const float sampleExtra = std::min(extra, sampleExtraCap);
+    sampleRateDropW += sampleExtra;
+    extra -= sampleExtra;
+
+    float midiInDropW = midiInDropMinW;
+    const float midiExtraCap = std::max(0.0f, midiInDropMaxW - midiInDropMinW);
+    const float midiExtra = std::min(extra, midiExtraCap);
+    midiInDropW += midiExtra;
+    extra -= midiExtra;
 
     float right = bounds_.right - paddingX;
 
@@ -174,40 +305,46 @@ void HeaderBarNode::arrange(const D2D1_RECT_F& bounds) {
                                 float dropdownW,
                                 D2D1_RECT_F& outLabelRect,
                                 const std::shared_ptr<DropdownSelectorNode>& selector) {
-        const float dropLeft = std::max(bounds_.left + paddingX, right - dropdownW);
+        const float minLeft = rightGroupLeftLimit;
+        if (right <= minLeft) {
+            outLabelRect = D2D1::RectF(minLeft, yTop, minLeft, yBottom);
+            if (selector) {
+                selector->arrange(D2D1::RectF(minLeft, yTop, minLeft, yBottom));
+            }
+            right = minLeft - groupGap;
+            return;
+        }
+
+        // Prefer keeping the label visible. If space is tight, shrink the
+        // dropdown first (its text is ellipsized).
+        const float groupLeftWanted = right - (labelW + labelGap + dropdownW);
+        const float groupLeft = std::max(minLeft, groupLeftWanted);
+
+        const float labelLeft = groupLeft;
+        const float labelRight = std::min(right, labelLeft + labelW);
+        outLabelRect = D2D1::RectF(labelLeft, yTop, labelRight, yBottom);
+
+        const float dropLeft = std::min(right, labelRight + labelGap);
         const auto dropRect = D2D1::RectF(dropLeft, yTop, right, yBottom);
-        const float labelRight = dropRect.left - labelGap;
-        outLabelRect = D2D1::RectF(labelRight - labelW, yTop, labelRight, yBottom);
         if (selector) {
             selector->arrange(dropRect);
         }
-        right = outLabelRect.left - groupGap;
+        right = groupLeft - groupGap;
     };
 
     // Right side: BufferFrames, SampleRate, Device.
     placeGroup(labelWBuffer, bufferFramesLabel_, bufferW, bufferFramesLabelRect_,
                bufferFramesSelector_);
-    placeGroup(labelWSample, sampleRateLabel_, sampleRateW, sampleRateLabelRect_,
+    placeGroup(labelWSample, sampleRateLabel_, sampleRateDropW, sampleRateLabelRect_,
                sampleRateSelector_);
 
-    // Device group gets the remaining space, but keeps a reasonable minimum width.
-    const float deviceDropMaxW = deviceWDefault;
-    const float deviceDropMinW = 180.0f;
-    const float remainingForDevice =
-        std::max(0.0f, right - (bounds_.left + paddingX + 160.0f));
-    const float deviceDropW =
-        std::clamp(remainingForDevice, deviceDropMinW, deviceDropMaxW);
+    placeGroup(labelWMidi, midiInputLabel_, midiInDropW, midiInputLabelRect_,
+               midiInputSelector_);
+
     placeGroup(labelWDevice, deviceLabel_, deviceDropW, deviceLabelRect_,
                deviceSelector_);
 
-    // Left side: logo + mix info (everything left of the device label area).   
-    const float logoLeft = bounds_.left + paddingX;
-
-    const float transportGap = 10.0f;
-    const float midiIconSize = std::min(32.0f, dropdownH);
-    const float midiIconGap = 0.0f;
-    const float midiGroupW = static_cast<float>(midiButtons_.size()) * midiIconSize;
-
+    // Left side: logo + transport (everything left of the device label area).
     const float transportRight =
         std::max(logoLeft, deviceLabelRect_.left - groupGap);
     const float transportLeft = std::max(logoLeft, transportRight - midiGroupW);
@@ -216,9 +353,6 @@ void HeaderBarNode::arrange(const D2D1_RECT_F& bounds) {
     const float logoRight = std::max(logoLeft, transportLeft - transportGap);
     logoRect_ = D2D1::RectF(logoLeft, bounds_.top + paddingY, logoRight,
                             bounds_.bottom - paddingY);
-    const float mixLeft = std::min(logoRect_.right, logoRect_.left + 96.0f);
-    mixRect_ =
-        D2D1::RectF(mixLeft, logoRect_.top, logoRect_.right, logoRect_.bottom);
 
     float x = midiRect_.left;
     for (auto& button : midiButtons_) {
@@ -241,79 +375,49 @@ void HeaderBarNode::draw(const RenderResources& resources) {
 
     resources.target->FillRectangle(bounds_, bg);
 
-    const auto drawLabel = [&](const std::wstring& label, const D2D1_RECT_F& r) {
-        if (label.empty() || r.right <= r.left) {
-            return;
-        }
-        const auto tr = D2D1::RectF(r.left, r.top, r.right, r.bottom);
-        const float original = text->GetOpacity();
-        text->SetOpacity(original * 0.75f);
-        const TextAlignmentGuard align(resources.textFormat,
-                                       DWRITE_TEXT_ALIGNMENT_CENTER,
-                                       DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        resources.target->DrawText(label.c_str(), static_cast<UINT32>(label.size()),
-                                   resources.textFormat, tr, text);
-        text->SetOpacity(original);
-    };
-
-    const auto brandRect =
-        D2D1::RectF(logoRect_.left, logoRect_.top, mixRect_.left, logoRect_.bottom);
-    if (!logoText_.empty() && brandRect.right > brandRect.left) {
-        const auto tr =
-            D2D1::RectF(brandRect.left, brandRect.top, brandRect.right, brandRect.bottom);
-        const TextAlignmentGuard align(resources.textFormat,
-                                       DWRITE_TEXT_ALIGNMENT_CENTER,
-                                       DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        resources.target->DrawText(logoText_.c_str(),
-                                   static_cast<UINT32>(logoText_.size()),
-                                   resources.textFormat, tr, accent);
-    }
-    if (!mixSampleRateText_.empty() && mixRect_.right > mixRect_.left) {
-        const auto lineBreak = mixSampleRateText_.find(L'\n');
-        if (lineBreak != std::wstring::npos) {
-            const std::wstring topLine = mixSampleRateText_.substr(0, lineBreak);
-            const std::wstring bottomLine = mixSampleRateText_.substr(lineBreak + 1);
-
-            const float h = mixRect_.bottom - mixRect_.top;
-            const float lineH = std::max(12.0f, h * 0.5f);
-            const auto trTop =
-                D2D1::RectF(mixRect_.left, mixRect_.top, mixRect_.right,
-                            std::min(mixRect_.bottom, mixRect_.top + lineH));
-            const auto trBottom = D2D1::RectF(
-                mixRect_.left, std::min(mixRect_.bottom, mixRect_.top + lineH - 2.0f),
-                mixRect_.right, mixRect_.bottom);
-
+        const auto drawLabel = [&](const std::wstring& label, const D2D1_RECT_F& r) {
+            if (label.empty() || r.right <= r.left) {
+                return;
+            }
+            const auto tr = D2D1::RectF(r.left, r.top, r.right, r.bottom);
             const float original = text->GetOpacity();
             text->SetOpacity(original * 0.75f);
+            resources.target->PushAxisAlignedClip(
+                tr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            const WordWrappingGuard wrap(resources.textFormat,
+                                         DWRITE_WORD_WRAPPING_NO_WRAP);
             const TextAlignmentGuard align(resources.textFormat,
                                            DWRITE_TEXT_ALIGNMENT_CENTER,
                                            DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            resources.target->DrawText(topLine.c_str(), static_cast<UINT32>(topLine.size()),
-                                       resources.textFormat, trTop, text);
-            text->SetOpacity(original);
-            const TextAlignmentGuard align2(resources.textFormat,
-                                            DWRITE_TEXT_ALIGNMENT_CENTER,
-                                            DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            resources.target->DrawText(bottomLine.c_str(),
-                                       static_cast<UINT32>(bottomLine.size()),
-                                       resources.textFormat, trBottom, text);
-        } else {
-            const auto tr =
-                D2D1::RectF(mixRect_.left, mixRect_.top, mixRect_.right, mixRect_.bottom);
-            const TextAlignmentGuard align(resources.textFormat,
-                                           DWRITE_TEXT_ALIGNMENT_CENTER,
-                                           DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            resources.target->DrawText(mixSampleRateText_.c_str(),
-                                       static_cast<UINT32>(mixSampleRateText_.size()),
+            resources.target->DrawText(label.c_str(), static_cast<UINT32>(label.size()),
                                        resources.textFormat, tr, text);
+            resources.target->PopAxisAlignedClip();
+            text->SetOpacity(original);
+        };
+
+        if (!logoText_.empty() && logoRect_.right > logoRect_.left) {
+            const auto tr = D2D1::RectF(logoRect_.left, logoRect_.top, logoRect_.right,
+                                        logoRect_.bottom);
+            resources.target->PushAxisAlignedClip(
+                tr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            const WordWrappingGuard wrap(resources.textFormat,
+                                         DWRITE_WORD_WRAPPING_NO_WRAP);
+            const TextAlignmentGuard align(resources.textFormat,
+                                           DWRITE_TEXT_ALIGNMENT_CENTER,
+                                           DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            resources.target->DrawText(logoText_.c_str(),
+                                       static_cast<UINT32>(logoText_.size()),
+                                       resources.textFormat, tr, accent);
+            resources.target->PopAxisAlignedClip();
         }
-    }
 
     drawLabel(deviceLabel_, deviceLabelRect_);
+    drawLabel(midiInputLabel_, midiInputLabelRect_);
     drawLabel(sampleRateLabel_, sampleRateLabelRect_);
     drawLabel(bufferFramesLabel_, bufferFramesLabelRect_);
 
     if (deviceSelector_) deviceSelector_->draw(resources);
+    if (midiInputSelector_) midiInputSelector_->draw(resources);
     if (sampleRateSelector_) sampleRateSelector_->draw(resources);
     if (bufferFramesSelector_) bufferFramesSelector_->draw(resources);
 
@@ -323,13 +427,7 @@ void HeaderBarNode::draw(const RenderResources& resources) {
         Microsoft::WRL::ComPtr<ID2D1Factory> factory;
         resources.target->GetFactory(&factory);
 
-        ID2D1SolidColorBrush* groupBg =
-            resources.trackBrush ? resources.trackBrush : resources.panelBrush;
-        if (groupBg) {
-            resources.target->FillRectangle(midiRect_, groupBg);
-        }
-
-        for (const auto& button : midiButtons_) {
+            for (const auto& button : midiButtons_) {
             const auto& r = button.bounds;
             if (r.right <= r.left || r.bottom <= r.top) {
                 continue;
@@ -453,12 +551,17 @@ bool HeaderBarNode::onPointerDown(float x, float y) {
         }
     }
 
-    bool handled = false;
-    if (deviceSelector_) handled = deviceSelector_->onPointerDown(x, y) || handled;
-    if (sampleRateSelector_) handled = sampleRateSelector_->onPointerDown(x, y) || handled;
-    if (bufferFramesSelector_) handled = bufferFramesSelector_->onPointerDown(x, y) || handled;
-    return handled;
-}
+        bool handled = false;
+        if (deviceSelector_)
+            handled = deviceSelector_->onPointerDown(x, y) || handled;
+        if (midiInputSelector_)
+            handled = midiInputSelector_->onPointerDown(x, y) || handled;
+        if (sampleRateSelector_)
+            handled = sampleRateSelector_->onPointerDown(x, y) || handled;
+        if (bufferFramesSelector_)
+            handled = bufferFramesSelector_->onPointerDown(x, y) || handled;
+        return handled;
+    }
 
 bool HeaderBarNode::onPointerMove(float x, float y) {
     bool handled = false;
@@ -484,11 +587,13 @@ bool HeaderBarNode::onPointerMove(float x, float y) {
         }
     }
 
-    if (deviceSelector_) handled = deviceSelector_->onPointerMove(x, y) || handled;
-    if (sampleRateSelector_) handled = sampleRateSelector_->onPointerMove(x, y) || handled;
-    if (bufferFramesSelector_) handled = bufferFramesSelector_->onPointerMove(x, y) || handled;
-    return handled;
-}
+        if (deviceSelector_) handled = deviceSelector_->onPointerMove(x, y) || handled;
+        if (midiInputSelector_)
+            handled = midiInputSelector_->onPointerMove(x, y) || handled;
+        if (sampleRateSelector_) handled = sampleRateSelector_->onPointerMove(x, y) || handled;
+        if (bufferFramesSelector_) handled = bufferFramesSelector_->onPointerMove(x, y) || handled;
+        return handled;
+    }
 
 void HeaderBarNode::onPointerUp() {
     if (activeMidiButton_ >= 0 &&
@@ -502,9 +607,10 @@ void HeaderBarNode::onPointerUp() {
             callback();
         }
     }
-    if (deviceSelector_) deviceSelector_->onPointerUp();
-    if (sampleRateSelector_) sampleRateSelector_->onPointerUp();
-    if (bufferFramesSelector_) bufferFramesSelector_->onPointerUp();
-}
+        if (deviceSelector_) deviceSelector_->onPointerUp();
+        if (midiInputSelector_) midiInputSelector_->onPointerUp();
+        if (sampleRateSelector_) sampleRateSelector_->onPointerUp();
+        if (bufferFramesSelector_) bufferFramesSelector_->onPointerUp();
+    }
 
 }  // namespace winui
